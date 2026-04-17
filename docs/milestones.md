@@ -35,7 +35,7 @@ Sizing convention:
   `moduleResolution: "bundler"`.
 - `tsup.config.ts` producing dual ESM + CJS outputs with `.d.ts` for both.
 - `vitest.config.ts` with coverage reporter.
-- `.eslintrc` + `prettier` config.
+- `eslint.config.js` (flat config, ESLint 9+) + `.prettierrc` config.
 - `src/index.ts` with stub exports: `parse`, `stringify`, `parseDocument`
   (each throwing `NotImplementedError` for now).
 - GitHub Actions CI workflow at `.github/workflows/ci.yml` that installs

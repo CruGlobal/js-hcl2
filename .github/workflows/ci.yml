@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: typecheck + lint + test + build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # asdf reads .tool-versions at the repo root and provisions the exact
+      # Node.js version declared there. We deliberately do NOT use
+      # actions/setup-node with a separate version pin — the contract is that
+      # .tool-versions is the single source of truth for every environment
+      # (local + CI). See CONTRIBUTING.md and docs/milestones.md M0.
+      - name: Install asdf and read .tool-versions
+        uses: asdf-vm/actions/install@v3
+
+      - name: Print Node.js version
+        run: node --version
+
+      - name: Cache npm dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
