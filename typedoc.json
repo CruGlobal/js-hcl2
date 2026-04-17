@@ -1,0 +1,18 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": ["src/index.ts"],
+  "out": "docs/api",
+  "name": "@cruglobal/js-hcl2",
+  "readme": "README.md",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeNotDocumented": false,
+  "hideGenerator": true,
+  "navigationLinks": {
+    "GitHub": "https://github.com/CruGlobal/js-hcl2",
+    "npm": "https://www.npmjs.com/package/@cruglobal/js-hcl2"
+  },
+  "sort": ["kind", "alphabetical"],
+  "categorizeByGroup": true
+}

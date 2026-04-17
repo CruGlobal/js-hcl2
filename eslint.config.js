@@ -11,6 +11,7 @@ export default tseslint.config(
       "dist/**",
       "coverage/**",
       "node_modules/**",
+      "docs/api/**",
       "scripts/deno-smoke.ts",
     ],
   },

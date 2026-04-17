@@ -1,18 +1,22 @@
 /**
  * @cruglobal/js-hcl2 — HashiCorp Configuration Language v2 parser and encoder.
  *
- * As of M5 the public `HCL.parse(source, options?)` entry point is live.
- * `HCL.stringify` (M6) and `HCL.parseDocument` (M7) are still stubs.
+ * Public entry points:
+ *
+ * - `parse(source, options?)` — HCL text → plain JS `Value`.
+ * - `stringify(value, options?)` — `Value` → canonical HCL text.
+ * - `parseDocument(source, options?)` — HCL text → trivia-aware
+ *   `Document` supporting lossless round-trip and in-place edits.
+ *
+ * See docs/design.md for the architectural overview.
  */
 
 import { HCLParseError } from "./errors.js";
 import { SourceFile } from "./source.js";
 import { parse as parseBodyInternal } from "./parser/parser.js";
 import { toValue, type Value } from "./value.js";
-import {
-  stringify as stringifyValue,
-  type StringifyOptions as CanonicalStringifyOptions,
-} from "./printer/canonical.js";
+import { stringify as stringifyValue } from "./printer/canonical.js";
+import type { StringifyOptions } from "./printer/canonical.js";
 import { Document as DocumentImpl } from "./document/document.js";
 import type { DocumentOptions } from "./document/document.js";
 
@@ -32,7 +36,11 @@ export {
   Parser,
 } from "./parser/parser.js";
 export { print } from "./parser/print.js";
-export type { ParserOptions, ParseResult } from "./parser/parser.js";
+export type {
+  ParserOptions,
+  ParseResult,
+  ExprParseResult,
+} from "./parser/parser.js";
 export type {
   Node,
   NodeKind,
@@ -70,6 +78,7 @@ export type {
   TemplateForDirectivePart,
   BinaryOp,
   UnaryOp,
+  PartsHolder,
 } from "./parser/nodes.js";
 export { isToken } from "./parser/nodes.js";
 
@@ -80,6 +89,7 @@ export { EXPRESSION_TAG } from "./value.js";
 
 // Canonical printer
 export { isValidIdentifier } from "./printer/canonical.js";
+export type { StringifyOptions } from "./printer/canonical.js";
 
 // Document model (lossless round-trip + edits)
 export { Document } from "./document/document.js";
@@ -89,27 +99,17 @@ export type { DocumentOptions, PathSegment } from "./document/document.js";
 // Public top-level API
 // ─────────────────────────────────────────────────────────────────────────────
 
-export class NotImplementedError extends Error {
-  constructor(feature: string) {
-    super(`${feature} is not implemented yet (pre-alpha)`);
-    this.name = "NotImplementedError";
-  }
-}
-
-/** Options accepted by the top-level `HCL.parse`. */
+/** Options accepted by the top-level `parse`. */
 export interface ParseOptions {
   /** Filename used in error messages. Default: "<input>". */
   filename?: string;
   /**
    * When true (the default), throw on the first parse error. When false,
-   * collect all errors and throw a single aggregate HCLParseError whose
+   * collect all errors and throw a single aggregate `HCLParseError` whose
    * `errors[]` array contains every individual failure.
    */
   bail?: boolean;
 }
-
-export type StringifyOptions = CanonicalStringifyOptions;
-
 
 /**
  * Parse HCL source text into a plain-JS `Value`. See docs/design.md §3.1
@@ -133,7 +133,8 @@ export function parse(source: string, options: ParseOptions = {}): Value {
 
 /**
  * Emit canonical HCL text from a plain-JS `Value`. See docs/design.md
- * §8 for the formatting rules and StringifyOptions for configurability.
+ * §8 for the formatting rules and {@link StringifyOptions} for
+ * configurability.
  */
 export function stringify(
   value: Value,
@@ -155,5 +156,5 @@ export function parseDocument(
   return new DocumentImpl(source, options);
 }
 
-const HCL = { parse, stringify, parseDocument, NotImplementedError };
+const HCL = { parse, stringify, parseDocument };
 export default HCL;
