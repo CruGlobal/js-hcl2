@@ -697,21 +697,26 @@ export class Lexer {
 
   /**
    * If the heredoc closing delimiter starts at `offset`, return the number
-   * of characters it spans (including optional leading whitespace for `<<-`
-   * heredocs and an optional trailing newline). Otherwise return 0.
+   * of characters it spans (consuming any leading whitespace on the close
+   * line plus the delimiter itself). Otherwise return 0.
+   *
+   * Both `<<` and `<<-` permit leading whitespace on the close marker —
+   * `<<-` additionally strips that common prefix from the body lines
+   * during value evaluation, but at the lexer level the matching rules
+   * are identical. The hashicorp/hcl specsuite fixture `heredoc.hcl`
+   * relies on this (its `marker_at_suffix` heredoc uses a `<<EOT` opener
+   * but closes with two leading spaces on the `EOT` line).
    */
   private matchHeredocEnd(
     offset: number,
     heredoc: { delimiter: string; strip: boolean },
   ): number {
     let i = offset;
-    if (heredoc.strip) {
-      while (
-        i < this.text.length &&
-        (this.text.charCodeAt(i) === SPACE || this.text.charCodeAt(i) === TAB)
-      ) {
-        i++;
-      }
+    while (
+      i < this.text.length &&
+      (this.text.charCodeAt(i) === SPACE || this.text.charCodeAt(i) === TAB)
+    ) {
+      i++;
     }
     const delim = heredoc.delimiter;
     if (this.text.slice(i, i + delim.length) !== delim) return 0;

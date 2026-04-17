@@ -9,6 +9,10 @@ import { HCLParseError } from "./errors.js";
 import { SourceFile } from "./source.js";
 import { parse as parseBodyInternal } from "./parser/parser.js";
 import { toValue, type Value } from "./value.js";
+import {
+  stringify as stringifyValue,
+  type StringifyOptions as CanonicalStringifyOptions,
+} from "./printer/canonical.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Library re-exports (types + lower-level helpers)
@@ -72,6 +76,9 @@ export { toValue, exprToValue, isExpression, unescapeTemplateLiteral } from "./v
 export type { Value, Expression, ExpressionValueKind } from "./value.js";
 export { EXPRESSION_TAG } from "./value.js";
 
+// Canonical printer
+export { isValidIdentifier } from "./printer/canonical.js";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public top-level API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,13 +102,7 @@ export interface ParseOptions {
   bail?: boolean;
 }
 
-export interface StringifyOptions {
-  indent?: number;
-  quotes?: "double";
-  trailingNewline?: boolean;
-  sortKeys?: boolean;
-  replacer?: (key: string, value: unknown) => unknown;
-}
+export type StringifyOptions = CanonicalStringifyOptions;
 
 export interface Document {
   toString(): string;
@@ -128,11 +129,15 @@ export function parse(source: string, options: ParseOptions = {}): Value {
   return toValue(result.body);
 }
 
+/**
+ * Emit canonical HCL text from a plain-JS `Value`. See docs/design.md
+ * §8 for the formatting rules and StringifyOptions for configurability.
+ */
 export function stringify(
-  _value: Value,
-  _options?: StringifyOptions,
+  value: Value,
+  options: StringifyOptions = {},
 ): string {
-  throw new NotImplementedError("HCL.stringify");
+  return stringifyValue(value, options);
 }
 
 export function parseDocument(

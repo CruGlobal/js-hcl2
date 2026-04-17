@@ -17,8 +17,8 @@ describe("public API surface", () => {
     expect(parse("x = 1\n")).toEqual({ x: 1 });
   });
 
-  it("HCL.stringify still throws NotImplementedError until M6", () => {
-    expect(() => stringify({ x: 1 })).toThrow(NotImplementedError);
+  it("HCL.stringify is live as of M6", () => {
+    expect(stringify({ x: 1 })).toBe("x = 1\n");
   });
 
   it("HCL.parseDocument still throws NotImplementedError until M7", () => {
