@@ -39,7 +39,11 @@ describe("attributes", () => {
     const attr = body.attributes[0]!;
     expect(attr.kind).toBe("Attribute");
     expect(attr.name).toBe("foo");
-    expect(attr.expression.parts.map((t) => t.lexeme)).toEqual(["1"]);
+    // M4: the RHS is now a structured expression. `1` → LiteralNode.
+    expect(attr.expression.kind).toBe("Literal");
+    if (attr.expression.kind === "Literal") {
+      expect(attr.expression.value).toBe(1);
+    }
   });
 
   it("parses multiple attributes", () => {
@@ -53,12 +57,23 @@ describe("attributes", () => {
     );
   });
 
-  it("captures object-literal expressions as a single opaque span", () => {
+  it("parses object-literal expressions as a structured ObjectNode", () => {
     const { body } = parseOK("x = { a = 1, b = 2 }\n");
     const expr = body.attributes[0]!.expression;
-    // Opaque: the span is flat tokens, not structured.
-    expect(expr.parts[0]!.lexeme).toBe("{");
-    expect(expr.parts[expr.parts.length - 1]!.lexeme).toBe("}");
+    expect(expr.kind).toBe("Object");
+    if (expr.kind === "Object") {
+      expect(expr.items).toHaveLength(2);
+      expect(
+        expr.items[0]!.key.kind === "Variable"
+          ? expr.items[0]!.key.name
+          : "?",
+      ).toBe("a");
+      expect(
+        expr.items[1]!.key.kind === "Variable"
+          ? expr.items[1]!.key.name
+          : "?",
+      ).toBe("b");
+    }
   });
 
   it("captures tuple and call expressions", () => {

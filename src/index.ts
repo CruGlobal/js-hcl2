@@ -13,7 +13,11 @@ export { SourceFile } from "./source.js";
 export { lex, Lexer } from "./lexer/lexer.js";
 export { TokenKind } from "./lexer/token.js";
 export type { Token } from "./lexer/token.js";
-export { parse as parseBody, Parser } from "./parser/parser.js";
+export {
+  parse as parseBody,
+  parseExpr,
+  Parser,
+} from "./parser/parser.js";
 export { print } from "./parser/print.js";
 export type { ParserOptions, ParseResult } from "./parser/parser.js";
 export type {
@@ -23,8 +27,36 @@ export type {
   AttributeNode,
   BlockNode,
   BlockLabelsNode,
-  ExpressionNode,
   LabelInfo,
+  // Expression AST
+  ExprNode,
+  ExprNodeKind,
+  LiteralNode,
+  VariableNode,
+  TupleNode,
+  ObjectNode,
+  ObjectItemNode,
+  TraversalNode,
+  TraversalStep,
+  GetAttrStep,
+  IndexStep,
+  SplatNode,
+  FunctionCallNode,
+  ForNode,
+  ConditionalNode,
+  BinaryOpNode,
+  UnaryOpNode,
+  ParensNode,
+  ErrorExprNode,
+  TemplateNode,
+  TemplatePart,
+  TemplatePartKind,
+  TemplateStringPart,
+  TemplateInterpolationPart,
+  TemplateIfDirectivePart,
+  TemplateForDirectivePart,
+  BinaryOp,
+  UnaryOp,
 } from "./parser/nodes.js";
 export { isToken } from "./parser/nodes.js";
 

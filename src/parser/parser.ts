@@ -17,7 +17,8 @@
  */
 
 import { HCLParseError } from "../errors.js";
-import type { Position, Range, SourceFile } from "../source.js";
+import type { Position, Range } from "../source.js";
+import { SourceFile } from "../source.js";
 import { lex } from "../lexer/lexer.js";
 import type { Token } from "../lexer/token.js";
 import { TokenKind } from "../lexer/token.js";
@@ -26,10 +27,11 @@ import type {
   BlockLabelsNode,
   BlockNode,
   BodyNode,
-  ExpressionNode,
+  ExprNode,
   LabelInfo,
   Node,
 } from "./nodes.js";
+import { parseExpression as parseExpressionNode } from "./expr.js";
 
 export interface ParserOptions {
   /** Throw on the first error (true) or collect all errors (false). Default: true. */
@@ -48,6 +50,27 @@ export interface ParseResult {
  */
 export function parse(source: SourceFile, options: ParserOptions = {}): ParseResult {
   return new Parser(source, options).parse();
+}
+
+/**
+ * Parse a single standalone expression. Intended for tools and tests
+ * that want to operate on an expression string without the surrounding
+ * attribute syntax (e.g., the M4 property test
+ * `lex(text) === lex(print(parseExpr(text)))`).
+ */
+export interface ExprParseResult {
+  readonly expr: ExprNode;
+  readonly errors: readonly HCLParseError[];
+}
+
+export function parseExpr(
+  text: string,
+  options: ParserOptions = {},
+): ExprParseResult {
+  const source = new SourceFile(text);
+  const parser = new Parser(source, options);
+  const expr = parser.parseOneExpression();
+  return { expr, errors: parser.getErrors() };
 }
 
 const OPENERS = new Set<TokenKind>([
@@ -70,7 +93,7 @@ const CLOSERS = new Set<TokenKind>([
 ]);
 
 export class Parser {
-  private readonly source: SourceFile;
+  readonly source: SourceFile;
   private readonly tokens: readonly Token[];
   private readonly bail: boolean;
   private readonly errors: HCLParseError[] = [];
@@ -193,6 +216,19 @@ export class Parser {
     };
   }
 
+  /**
+   * Public entry point for the expression parser (exposed so the
+   * standalone `parseExpr(text)` helper can drive the same cursor).
+   */
+  parseOneExpression(): ExprNode {
+    return this.parseExpression();
+  }
+
+  /** Accessor for the collected errors list (used by parseExpr). */
+  getErrors(): readonly HCLParseError[] {
+    return this.errors;
+  }
+
   private parseBlock(): BlockNode {
     const typeTok = this.consume(); // IDENT
     const labels = this.parseBlockLabels();
@@ -293,53 +329,17 @@ export class Parser {
     };
   }
 
-  /**
-   * Scan an opaque expression token span. The expression ends when, at
-   * depth 0, we see a NEWLINE, COMMA, EOF, or any closing delimiter
-   * (RBRACE / RBRACK / RPAREN / CQUOTE / HEREDOC_END / TEMPLATE_SEQ_END).
-   * Openers (LBRACE / LBRACK / LPAREN / OQUOTE / HEREDOC_BEGIN /
-   * TEMPLATE_INTERP / TEMPLATE_CONTROL) push depth; matching closers pop.
-   *
-   * An empty expression (immediate terminator) is a parse error.
-   */
-  private parseExpression(): ExpressionNode {
-    const parts: Token[] = [];
-    const startTok = this.peek();
-    let depth = 0;
-    while (!this.atEnd()) {
-      const tok = this.peek();
-      if (tok.kind === TokenKind.EOF) break;
-      if (depth === 0) {
-        if (
-          tok.kind === TokenKind.NEWLINE ||
-          tok.kind === TokenKind.COMMA ||
-          CLOSERS.has(tok.kind)
-        ) {
-          break;
-        }
-      }
-      if (OPENERS.has(tok.kind)) depth++;
-      else if (CLOSERS.has(tok.kind)) depth--;
-      parts.push(this.consume());
-    }
-    if (parts.length === 0) {
-      this.errorAt(startTok.range, "expected expression");
-    }
-    const range: Range =
-      parts.length > 0
-        ? {
-            start: parts[0]!.range.start,
-            end: parts[parts.length - 1]!.range.end,
-          }
-        : { start: startTok.range.start, end: startTok.range.start };
-    return { kind: "Expression", range, parts };
+  /** Dispatch to the full expression parser in expr.ts. */
+  private parseExpression(): ExprNode {
+    return parseExpressionNode(this);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Token cursor helpers
+  // Token cursor helpers (public — consumed by the expression parser via
+  // the ExprCursor interface in expr.ts).
   // ─────────────────────────────────────────────────────────────────────────
 
-  private peek(offset = 0): Token {
+  peek(offset = 0): Token {
     const idx = this.pos + offset;
     if (idx >= this.tokens.length) {
       return this.tokens[this.tokens.length - 1]!; // always EOF
@@ -347,13 +347,13 @@ export class Parser {
     return this.tokens[idx]!;
   }
 
-  private consume(): Token {
+  consume(): Token {
     const tok = this.tokens[this.pos]!;
     if (this.pos < this.tokens.length - 1) this.pos++;
     return tok;
   }
 
-  private atEnd(): boolean {
+  atEnd(): boolean {
     return this.peek().kind === TokenKind.EOF;
   }
 
@@ -378,7 +378,7 @@ export class Parser {
   // Error handling
   // ─────────────────────────────────────────────────────────────────────────
 
-  private errorAt(range: Range, message: string): void {
+  errorAt(range: Range, message: string): void {
     const err = new HCLParseError(this.source, range, message);
     this.errors.push(err);
     if (this.bail) throw err;

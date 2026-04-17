@@ -8,12 +8,14 @@
  */
 
 import type { Token } from "../lexer/token.js";
-import type { Node } from "./nodes.js";
+import type { PartsHolder } from "./nodes.js";
 import { isToken } from "./nodes.js";
 
 /** Print a CST node (or a single Token) back to its source representation. */
-export function print(node: Node | Token): string {
-  if (isToken(node)) return node.leadingTrivia + node.lexeme + node.trailingTrivia;
+export function print(node: PartsHolder | Token): string {
+  if (isToken(node)) {
+    return node.leadingTrivia + node.lexeme + node.trailingTrivia;
+  }
   let out = "";
   for (const part of node.parts) {
     out += print(part);
