@@ -1,10 +1,14 @@
 /**
  * @cruglobal/js-hcl2 — HashiCorp Configuration Language v2 parser and encoder.
  *
- * This file is a stub placeholder created by milestone M0. Real
- * implementations land in M2 (lexer), M3–M4 (parser), M5 (Value projection),
- * M6 (canonical printer), and M7 (Document / lossless round-trip).
+ * The top-level parse/stringify/parseDocument functions are stubs until the
+ * lexer (M2), parser (M3–M4), value projection (M5), canonical printer (M6),
+ * and document round-trip (M7) land. The supporting types and utilities
+ * re-exported below are production code as of M1.
  */
+
+export { HCLParseError, formatSnippet } from "./errors.js";
+export type { Position, Range } from "./source.js";
 
 export class NotImplementedError extends Error {
   constructor(feature: string) {
