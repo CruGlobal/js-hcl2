@@ -13,6 +13,8 @@ import {
   stringify as stringifyValue,
   type StringifyOptions as CanonicalStringifyOptions,
 } from "./printer/canonical.js";
+import { Document as DocumentImpl } from "./document/document.js";
+import type { DocumentOptions } from "./document/document.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Library re-exports (types + lower-level helpers)
@@ -79,6 +81,10 @@ export { EXPRESSION_TAG } from "./value.js";
 // Canonical printer
 export { isValidIdentifier } from "./printer/canonical.js";
 
+// Document model (lossless round-trip + edits)
+export { Document } from "./document/document.js";
+export type { DocumentOptions, PathSegment } from "./document/document.js";
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public top-level API
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,10 +110,6 @@ export interface ParseOptions {
 
 export type StringifyOptions = CanonicalStringifyOptions;
 
-export interface Document {
-  toString(): string;
-  toValue(): Value;
-}
 
 /**
  * Parse HCL source text into a plain-JS `Value`. See docs/design.md §3.1
@@ -140,11 +142,17 @@ export function stringify(
   return stringifyValue(value, options);
 }
 
+/**
+ * Parse HCL source into a trivia-aware `Document`. The document
+ * round-trips byte-identically via `toString()` and supports
+ * trivia-preserving edits via `set` / `delete`. See
+ * docs/design.md §7 for the guarantees.
+ */
 export function parseDocument(
-  _source: string,
-  _options?: ParseOptions,
-): Document {
-  throw new NotImplementedError("HCL.parseDocument");
+  source: string,
+  options: DocumentOptions = {},
+): DocumentImpl {
+  return new DocumentImpl(source, options);
 }
 
 const HCL = { parse, stringify, parseDocument, NotImplementedError };

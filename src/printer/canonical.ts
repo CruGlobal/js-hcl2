@@ -52,6 +52,25 @@ const DEFAULTS: ResolvedStringifyOptions = {
   replacer: undefined,
 };
 
+/**
+ * Emit a single Value in expression position — no attribute scaffolding,
+ * no trailing newline. Used by the Document API to render replacement
+ * subtrees for attribute values.
+ */
+export function stringifyExpression(
+  value: Value,
+  options: StringifyOptions = {},
+): string {
+  const opts: ResolvedStringifyOptions = {
+    indent: options.indent ?? DEFAULTS.indent,
+    trailingNewline: options.trailingNewline ?? DEFAULTS.trailingNewline,
+    sortKeys: options.sortKeys ?? DEFAULTS.sortKeys,
+    replacer: options.replacer,
+  };
+  const resolved = applyReplacer("", value, opts.replacer);
+  return printValueExpression(resolved, 0, opts);
+}
+
 /** Canonical stringify. See StringifyOptions for options. */
 export function stringify(value: Value, options: StringifyOptions = {}): string {
   const opts: ResolvedStringifyOptions = {

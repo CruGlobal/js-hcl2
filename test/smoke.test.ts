@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import HCL, {
-  NotImplementedError,
   parse,
   parseDocument,
   stringify,
@@ -21,7 +20,9 @@ describe("public API surface", () => {
     expect(stringify({ x: 1 })).toBe("x = 1\n");
   });
 
-  it("HCL.parseDocument still throws NotImplementedError until M7", () => {
-    expect(() => parseDocument("x = 1")).toThrow(NotImplementedError);
+  it("HCL.parseDocument is live as of M7", () => {
+    const doc = parseDocument("x = 1\n");
+    expect(doc.toString()).toBe("x = 1\n");
+    expect(doc.toValue()).toEqual({ x: 1 });
   });
 });
