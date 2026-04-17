@@ -315,14 +315,24 @@ it working.
 
 **Deliverables.**
 
-- Playwright test that imports the ESM build in a headless Chromium page,
-  parses a fixture, and asserts the result.
-- Bun-specific CI job running the existing test suite under `bun test`.
-- Deno-specific CI job loading the ESM build with Deno's `npm:` specifier.
-- `package.json` `exports` map audited: no conditional exports pointing at
-  Node-only code paths.
+- A browser-environment smoke test that exercises parse / stringify /
+  parseDocument inside a DOM-ish runtime. Initially planned as a
+  Playwright + headless Chromium test, but scoped down to a vitest
+  test running under `happy-dom` so the `devDep` + CI surface stays
+  small. The test runs on every push (not a separate job), and its
+  guarantee is "library code runs outside Node APIs" rather than
+  "works in a real browser engine." A true-browser Playwright job is
+  reserved for when real-browser-specific regressions surface.
+- Bun-specific CI job running the existing vitest suite under Bun via
+  `bunx vitest run`. Catches accidental Node-specific API reliance.
+- Deno-specific CI job that builds the ESM bundle and loads it via
+  `scripts/deno-smoke.ts`, asserting a handful of public-API shapes.
+- `package.json` `exports` map audited: dual `import` / `require`
+  conditions with no Node-only paths. Verified with a grep over
+  `src/` confirming no `node:` imports or Node globals.
 
-**Done when.** All four runtime jobs (Node, Bun, Deno, browser) are green.
+**Done when.** All three CI jobs (Node + Bun + Deno) are green and
+the happy-dom test passes as part of the Node job.
 
 ---
 

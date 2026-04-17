@@ -66,6 +66,7 @@
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^10.0.0",
     "fast-check": "^4.7.0",
+    "happy-dom": "^20.9.0",
     "hcl2-json-parser": "^1.0.1",
     "prettier": "^3.0.0",
     "tsup": "^8.0.0",

@@ -4,7 +4,15 @@ import prettier from "eslint-config-prettier";
 
 export default tseslint.config(
   {
-    ignores: ["dist/**", "coverage/**", "node_modules/**"],
+    // The Deno smoke script imports `../dist/index.js`, which doesn't
+    // exist at lint time and uses Deno-only runtime APIs. It is executed
+    // by the deno CI job, not by tsc / eslint.
+    ignores: [
+      "dist/**",
+      "coverage/**",
+      "node_modules/**",
+      "scripts/deno-smoke.ts",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
