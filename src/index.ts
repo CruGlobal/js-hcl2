@@ -1,11 +1,18 @@
 /**
  * @cruglobal/js-hcl2 — HashiCorp Configuration Language v2 parser and encoder.
  *
- * The top-level parse/stringify/parseDocument functions are stubs until the
- * lexer (M2), parser (M3–M4), value projection (M5), canonical printer (M6),
- * and document round-trip (M7) land. The supporting types and utilities
- * re-exported below are production code as of M1.
+ * As of M5 the public `HCL.parse(source, options?)` entry point is live.
+ * `HCL.stringify` (M6) and `HCL.parseDocument` (M7) are still stubs.
  */
+
+import { HCLParseError } from "./errors.js";
+import { SourceFile } from "./source.js";
+import { parse as parseBodyInternal } from "./parser/parser.js";
+import { toValue, type Value } from "./value.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Library re-exports (types + lower-level helpers)
+// ─────────────────────────────────────────────────────────────────────────────
 
 export { HCLParseError, formatSnippet } from "./errors.js";
 export type { Position, Range } from "./source.js";
@@ -60,6 +67,15 @@ export type {
 } from "./parser/nodes.js";
 export { isToken } from "./parser/nodes.js";
 
+// Value projection
+export { toValue, exprToValue, isExpression, unescapeTemplateLiteral } from "./value.js";
+export type { Value, Expression, ExpressionValueKind } from "./value.js";
+export { EXPRESSION_TAG } from "./value.js";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Public top-level API
+// ─────────────────────────────────────────────────────────────────────────────
+
 export class NotImplementedError extends Error {
   constructor(feature: string) {
     super(`${feature} is not implemented yet (pre-alpha)`);
@@ -67,8 +83,15 @@ export class NotImplementedError extends Error {
   }
 }
 
+/** Options accepted by the top-level `HCL.parse`. */
 export interface ParseOptions {
+  /** Filename used in error messages. Default: "<input>". */
   filename?: string;
+  /**
+   * When true (the default), throw on the first parse error. When false,
+   * collect all errors and throw a single aggregate HCLParseError whose
+   * `errors[]` array contains every individual failure.
+   */
   bail?: boolean;
 }
 
@@ -80,21 +103,29 @@ export interface StringifyOptions {
   replacer?: (key: string, value: unknown) => unknown;
 }
 
-export type Value =
-  | null
-  | boolean
-  | number
-  | string
-  | readonly Value[]
-  | { readonly [key: string]: Value };
-
 export interface Document {
   toString(): string;
   toValue(): Value;
 }
 
-export function parse(_source: string, _options?: ParseOptions): Value {
-  throw new NotImplementedError("HCL.parse");
+/**
+ * Parse HCL source text into a plain-JS `Value`. See docs/design.md §3.1
+ * for the value shape and docs/design.md §3.4 for error semantics.
+ */
+export function parse(source: string, options: ParseOptions = {}): Value {
+  const sourceFile = new SourceFile(source, options.filename);
+  const result = parseBodyInternal(sourceFile, { bail: options.bail ?? true });
+  if (result.errors.length > 0) {
+    // Only reachable when bail=false and at least one error was
+    // collected. Wrap the individual errors into a single aggregate.
+    const first = result.errors[0]!;
+    const message =
+      result.errors.length === 1
+        ? first.message
+        : `${result.errors.length} parse errors; first: ${first.message}`;
+    throw new HCLParseError(sourceFile, first.range, message, result.errors);
+  }
+  return toValue(result.body);
 }
 
 export function stringify(

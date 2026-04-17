@@ -6,22 +6,22 @@ import HCL, {
   stringify,
 } from "../src/index.js";
 
-describe("M0 stubs", () => {
+describe("public API surface", () => {
   it("exports parse, stringify, parseDocument from the default export", () => {
     expect(HCL.parse).toBe(parse);
     expect(HCL.stringify).toBe(stringify);
     expect(HCL.parseDocument).toBe(parseDocument);
   });
 
-  it("throws NotImplementedError from parse", () => {
-    expect(() => parse("x = 1")).toThrow(NotImplementedError);
+  it("HCL.parse is live as of M5", () => {
+    expect(parse("x = 1\n")).toEqual({ x: 1 });
   });
 
-  it("throws NotImplementedError from stringify", () => {
+  it("HCL.stringify still throws NotImplementedError until M6", () => {
     expect(() => stringify({ x: 1 })).toThrow(NotImplementedError);
   });
 
-  it("throws NotImplementedError from parseDocument", () => {
+  it("HCL.parseDocument still throws NotImplementedError until M7", () => {
     expect(() => parseDocument("x = 1")).toThrow(NotImplementedError);
   });
 });
