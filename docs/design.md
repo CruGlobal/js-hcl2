@@ -266,7 +266,10 @@ Grouped to match the HCL2 spec:
 - **Template structure**: `OQUOTE`, `CQUOTE`, `QUOTED_LIT`, `TEMPLATE_INTERP`
   (`${`), `TEMPLATE_CONTROL` (`%{`), `TEMPLATE_SEQ_END` (`}` closing
   interpolation/control), `TEMPLATE_STRIP` (`~`), `HEREDOC_BEGIN`,
-  `HEREDOC_LINE`, `HEREDOC_END`.
+  `HEREDOC_END`. Heredoc body content uses the same `QUOTED_LIT` /
+  `TEMPLATE_INTERP` / `TEMPLATE_CONTROL` vocabulary as quoted strings —
+  there is no separate per-line heredoc token, because interpolations can
+  appear mid-line.
 - **Structural**: `NEWLINE`, `EOF`.
 - **Synthetic**: `INVALID` (carries an error message for recovery).
 

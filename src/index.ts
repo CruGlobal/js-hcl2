@@ -9,6 +9,10 @@
 
 export { HCLParseError, formatSnippet } from "./errors.js";
 export type { Position, Range } from "./source.js";
+export { SourceFile } from "./source.js";
+export { lex, Lexer } from "./lexer/lexer.js";
+export { TokenKind } from "./lexer/token.js";
+export type { Token } from "./lexer/token.js";
 
 export class NotImplementedError extends Error {
   constructor(feature: string) {
