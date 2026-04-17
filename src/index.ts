@@ -13,6 +13,20 @@ export { SourceFile } from "./source.js";
 export { lex, Lexer } from "./lexer/lexer.js";
 export { TokenKind } from "./lexer/token.js";
 export type { Token } from "./lexer/token.js";
+export { parse as parseBody, Parser } from "./parser/parser.js";
+export { print } from "./parser/print.js";
+export type { ParserOptions, ParseResult } from "./parser/parser.js";
+export type {
+  Node,
+  NodeKind,
+  BodyNode,
+  AttributeNode,
+  BlockNode,
+  BlockLabelsNode,
+  ExpressionNode,
+  LabelInfo,
+} from "./parser/nodes.js";
+export { isToken } from "./parser/nodes.js";
 
 export class NotImplementedError extends Error {
   constructor(feature: string) {

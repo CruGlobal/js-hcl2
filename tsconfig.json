@@ -20,7 +20,7 @@
     "verbatimModuleSyntax": true,
     "outDir": "dist",
     "rootDir": ".",
-    "types": ["vitest/globals"]
+    "types": ["vitest/globals", "node"]
   },
   "include": ["src/**/*", "test/**/*", "*.config.ts", "eslint.config.js"],
   "exclude": ["node_modules", "dist", "coverage"]

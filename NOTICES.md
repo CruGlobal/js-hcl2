@@ -21,9 +21,21 @@ shipped in the npm tarball.
   License — permissive, BSD-compatible).
 - "Unicode" is a registered trademark of Unicode, Inc.
 
-## hashicorp/hcl test fixtures (planned)
+## hashicorp/hcl specsuite fixtures
 
-Vendored test fixtures from [`hashicorp/hcl`](https://github.com/hashicorp/hcl)
-will be added under `test/corpus/hashicorp-hcl/` during milestone M8. At
-that time, this file will be updated with the attribution and a pointer
-to the upstream MPL-2.0 license notice retained with the fixtures.
+Path: `test/corpus/hashicorp-hcl/*.hcl`
+
+A curated subset of the `specsuite/tests/` tree from
+[`hashicorp/hcl`](https://github.com/hashicorp/hcl), used as real-world
+input for the M3 parser round-trip tests. The full upstream MPL-2.0
+license is retained at `test/corpus/hashicorp-hcl/LICENSE` alongside the
+fixtures.
+
+- Source: <https://github.com/hashicorp/hcl> (main branch at vendor time)
+- Copyright IBM Corp. 2014, 2025 (per the upstream LICENSE file).
+- License: Mozilla Public License v2.0 (MPL-2.0).
+
+These files live only in the repository and are excluded from the
+published npm tarball via `package.json#files`, so the shipped artifact
+contains only BSD-3-Clause code. The vendored sample is an early
+down-payment on M8, which will expand the corpus substantially.
