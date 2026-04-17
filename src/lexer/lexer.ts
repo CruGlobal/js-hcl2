@@ -101,7 +101,16 @@ export class Lexer {
     if (top.kind === "TEMPLATE_INTERP" || top.kind === "TEMPLATE_CONTROL") {
       return true;
     }
-    if (top.kind === "NORMAL" && this.brackets.length > 0) return true;
+    // Inside ( or [, newlines are insignificant. Braces are also pushed
+    // onto the bracket stack so we can tell when we've re-entered a
+    // newline-significant context (like an object literal inside a
+    // function-call argument) — but `{` is emitted as "preserve
+    // newlines" so that nested object items still get their separators.
+    if (top.kind === "NORMAL" && this.brackets.length > 0) {
+      const topBracket = this.brackets[this.brackets.length - 1]!;
+      // 0x28 '(' and 0x5b '[' suppress; 0x7b '{' does not.
+      return topBracket === 0x28 || topBracket === 0x5b;
+    }
     return false;
   }
 
@@ -262,10 +271,17 @@ export class Lexer {
     const c = this.text.charCodeAt(lexemeStart);
     const { kind, error } = this.scanNormalLexeme(c);
     const lexemeEnd = this.pos;
-    // A NEWLINE lexeme ends on a new line, so anything that follows is on a
-    // different line and cannot be same-line trailing trivia. Leave it for
-    // the next token's leading trivia.
-    if (kind !== TokenKind.NEWLINE) this.skipTrailingTrivia();
+    // A NEWLINE lexeme ends on a new line, so anything that follows is on
+    // a different line and cannot be same-line trailing trivia. Leave it
+    // for the next token's leading trivia.
+    //
+    // Similarly, tokens that transition into TEMPLATE mode (OQUOTE,
+    // HEREDOC_BEGIN) must not skip trailing trivia — the next character
+    // is template body content, not whitespace to absorb.
+    const nextMode = this.currentMode();
+    if (kind !== TokenKind.NEWLINE && nextMode.kind !== "TEMPLATE") {
+      this.skipTrailingTrivia();
+    }
     const trailingEnd = this.pos;
 
     return this.make(kind, leadingStart, lexemeStart, lexemeEnd, trailingEnd, error);
@@ -306,6 +322,14 @@ export class Lexer {
       if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
         mode.braceDepth--;
       }
+      // Pop the matching LBRACE off the bracket stack (pushed for
+      // newline-significance tracking above).
+      if (
+        this.brackets.length > 0 &&
+        this.brackets[this.brackets.length - 1] === LBRACE
+      ) {
+        this.brackets.pop();
+      }
       this.pos++;
       return { kind: TokenKind.RBRACE };
     }
@@ -329,6 +353,11 @@ export class Lexer {
       if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
         mode.braceDepth++;
       }
+      // Push onto the bracket stack so an object literal nested inside
+      // () or [] re-enters a newline-significant context (see
+      // shouldSuppressNewlines). Block bodies also land here, which is
+      // fine — the parser is already newline-tolerant in block bodies.
+      this.brackets.push(LBRACE);
       this.pos++;
       return { kind: TokenKind.LBRACE };
     }

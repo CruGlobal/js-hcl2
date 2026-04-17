@@ -1,0 +1,7 @@
+αβγ         = "greek"
+中文        = "hanzi"
+русский     = "cyrillic"
+日本語      = "japanese"
+vietnamese  = "tiếng việt"
+emoji_str   = "a 🎉 b"
+mixed       = "Ω resistance = ${value} ohms"

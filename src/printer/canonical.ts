@@ -132,15 +132,25 @@ function printBodyEntry(
     emitAttribute(key, value, depth, opts, out);
     return;
   }
-  if (Array.isArray(value) && value.length > 0 && value.every(isPlainObject)) {
-    for (const item of value) {
-      emitAsBlocks(key, [], item, depth, opts, out);
+  // Block emission requires an identifier key at the body level
+  // (block TYPES cannot be quoted). Non-identifier keys fall through
+  // to attribute emission, even if the value would otherwise be
+  // emitted as a block.
+  if (isValidIdentifier(key)) {
+    if (
+      Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(isPlainObject)
+    ) {
+      for (const item of value) {
+        emitAsBlocks(key, [], item, depth, opts, out);
+      }
+      return;
     }
-    return;
-  }
-  if (isPlainObject(value)) {
-    emitAsBlocks(key, [], value, depth, opts, out);
-    return;
+    if (isPlainObject(value)) {
+      emitAsBlocks(key, [], value, depth, opts, out);
+      return;
+    }
   }
   emitAttribute(key, value, depth, opts, out);
 }
@@ -446,7 +456,9 @@ function isLabelLayer(obj: Record<string, Value>): boolean {
   const entries = Object.entries(obj);
   if (entries.length === 0) return false;
   for (const [k, v] of entries) {
-    if (!isValidIdentifier(k)) return false;
+    // Empty keys would emit as '""' which HCL parsers accept as a label
+    // but is pathological; bail out.
+    if (k.length === 0) return false;
     if (isPlainObject(v)) continue;
     if (Array.isArray(v) && v.length > 0 && v.every(isPlainObject)) continue;
     return false;
