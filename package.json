@@ -1,6 +1,7 @@
 {
   "name": "@cruglobal/js-hcl2",
   "version": "0.1.0",
+  "private": true,
   "description": "Parse and encode HashiCorp Configuration Language v2 (HCL2) in TypeScript, with lossless round-trip support.",
   "keywords": [
     "hcl",
