@@ -1,0 +1,117 @@
+name: release
+
+# Fires when a GitHub Release is published. release-please (on main)
+# is the intended source: when its release PR is merged, release-please
+# creates a matching GitHub Release and this workflow picks it up.
+# Manual releases created through the UI / gh CLI work too, and
+# workflow_dispatch is available for retrying a failed publish or
+# re-deploying docs without cutting a new release.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One release workflow at a time. Pages deploys and npm publishes are
+# both single-writer operations; serialize to avoid races.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish-npm:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance (signed build attestations). Without
+      # it, `npm publish --provenance` fails at upload time.
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Sanity: re-run the full check suite against the exact commit
+      # being published. release-please's PR was already green before
+      # merge, but releases can also be cut manually, and the 30-second
+      # cost buys us protection against that.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Currently fails with EPRIVATE because package.json has
+      # `"private": true`. Intentional — it keeps accidental publishes
+      # impossible until the repo is ready to ship. To enable real
+      # publishes:
+      #   1. Remove `"private": true` from package.json.
+      #   2. Add an NPM_TOKEN secret (automation token, granular or
+      #      classic) to the repo with publish rights on the
+      #      @cruglobal scope.
+      #
+      # `--provenance` attaches a signed SLSA attestation to the
+      # package; requires the id-token: write permission above. It is
+      # the recommended setting for all first-party npm publishes as of
+      # npm 9+.
+      - name: Publish to npm
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  deploy-docs:
+    name: Deploy TypeDoc to GitHub Pages
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate TypeDoc site
+        run: npm run docs
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/api
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
