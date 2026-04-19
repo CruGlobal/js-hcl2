@@ -1,0 +1,29 @@
+name: release-please
+
+on:
+  push:
+    branches: [main]
+  # Allow manual invocation from the Actions tab for first-run bootstrap
+  # or after config changes.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run release-please
+        uses: googleapis/release-please-action@v4
+        with:
+          # The default GITHUB_TOKEN has contents:write + pull-requests:write
+          # (granted by the permissions block above), which is enough for
+          # release-please to open/update the release PR and cut tags. Swap
+          # to a PAT only if you need releases to be attributed to a human
+          # identity (that also lets this workflow's events trigger other
+          # workflows — see release-please docs on "tag push events").
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
