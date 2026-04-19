@@ -1,0 +1,49 @@
+name: dependabot-auto-merge
+
+# Auto-approves and enables auto-merge on Dependabot PRs that are
+# resolving a security advisory. Non-security updates (regular
+# weekly minor/patch groups) are left to be reviewed by a human.
+#
+# The workflow does NOT merge directly — it enables GitHub's
+# "auto-merge" feature, which waits for the branch-protection
+# required checks (CI) to go green before merging. If the repo does
+# not have branch protection + required checks configured, GitHub
+# falls back to an immediate merge once auto-merge is enabled.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge-security:
+    # Only run on Dependabot-opened PRs; skip everything else to
+    # avoid churn and keep the job fast.
+    if: ${{ github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Read Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # `alert-state` is non-empty when Dependabot opened the PR in
+      # response to a security advisory — that's the signal we use to
+      # gate the auto-merge. Regular version-bump PRs leave it empty.
+      - name: Approve security fix
+        if: ${{ steps.meta.outputs.alert-state != '' }}
+        run: gh pr review --approve "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Enable squash auto-merge
+        if: ${{ steps.meta.outputs.alert-state != '' }}
+        run: gh pr merge --squash --auto "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
