@@ -67,10 +67,12 @@ implementing:
 ## Toolchain
 
 - **Node.js 24.x** is the development runtime, pinned via a
-  `.tool-versions` file at the repo root and provisioned by
-  [`asdf`](https://asdf-vm.com/). Run `asdf install` from the repo root
-  before `npm install`. CI uses the same `.tool-versions` file via an
-  `asdf` GitHub Action — never pin Node separately in a workflow matrix.
+  `.tool-versions` file at the repo root. Locally,
+  [`asdf`](https://asdf-vm.com/) reads that file (`asdf install` from
+  the repo root before `npm install`). In CI, `actions/setup-node@v6`
+  reads the same file via its `node-version-file` input, so local and
+  CI Node versions cannot drift. Never pin Node separately in a
+  workflow matrix.
 - The *shipped library* targets ES2022 and is runtime-agnostic (Node +
   Bun + Deno + browsers). The 24.x pin only applies to the dev
   environment.

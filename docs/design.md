@@ -533,12 +533,14 @@ multi-line expressions. This means
   both entry points.
 - **Targets**: ES2022. Uses only standard lib types (no Node-specific APIs
   in the library; tests may use Node).
-- **Toolchain management**: [`asdf`](https://asdf-vm.com/) pins the
-  development Node.js version via a committed `.tool-versions` file at the
-  repo root (`nodejs 24.x` — latest `24.*` LTS minor at pin time). Every
-  contributor and CI runner resolves the same interpreter by running
-  `asdf install`. Node.js 24.x is the **development** runtime; the shipped
-  library remains runtime-agnostic (see "Targets" above).
+- **Toolchain management**: the development Node.js version is pinned
+  in a committed `.tool-versions` file at the repo root (`nodejs 24.x`
+  — latest `24.*` LTS minor at pin time). Locally, contributors use
+  [`asdf`](https://asdf-vm.com/) to read that file (`asdf install`).
+  In CI, `actions/setup-node@v6` consumes the same file via its
+  `node-version-file` input, so local and CI resolve identically
+  without a separate pin. Node.js 24.x is the **development** runtime;
+  the shipped library remains runtime-agnostic (see "Targets" above).
 - **Package name**: `@cruglobal/js-hcl2`, published under the
   [`cruglobal`](https://www.npmjs.com/org/cruglobal) npm organization. The
   repo directory name (`js-hcl2`) mirrors the unscoped portion.

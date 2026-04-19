@@ -18,24 +18,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # asdf reads .tool-versions at the repo root and provisions the exact
-      # Node.js version declared there. We deliberately do NOT use
-      # actions/setup-node with a separate version pin — the contract is that
-      # .tool-versions is the single source of truth for every environment
-      # (local + CI). See CONTRIBUTING.md and docs/milestones.md M0.
-      - name: Install asdf and read .tool-versions
-        uses: asdf-vm/actions/install@v4
-
-      - name: Print Node.js version
-        run: node --version
-
-      - name: Cache npm dependencies
-        uses: actions/cache@v4
+      # setup-node reads the `nodejs` entry out of .tool-versions, so the
+      # Node.js version stays pinned in a single file (asdf consumes it
+      # locally, setup-node consumes it in CI). No separate Node pin in
+      # the workflow — that way the local and CI versions cannot drift.
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          path: ~/.npm
-          key: ${{ runner.os }}-npm-${{ hashFiles('package-lock.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
+          node-version-file: .tool-versions
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
@@ -89,8 +80,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install asdf and read .tool-versions
-        uses: asdf-vm/actions/install@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .tool-versions
+          cache: npm
 
       - name: Install dependencies
         run: npm ci

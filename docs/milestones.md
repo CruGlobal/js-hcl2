@@ -38,11 +38,12 @@ Sizing convention:
 - `eslint.config.js` (flat config, ESLint 9+) + `.prettierrc` config.
 - `src/index.ts` with stub exports: `parse`, `stringify`, `parseDocument`
   (each throwing `NotImplementedError` for now).
-- GitHub Actions CI workflow at `.github/workflows/ci.yml` that installs
-  `asdf` (via `asdf-vm/actions/install@v3` or equivalent) and runs
-  `asdf install` to read `.tool-versions`, so CI uses the exact Node.js
-  version committed in the repo — not a separately-pinned
-  `actions/setup-node` matrix. Jobs: typecheck, lint, test, build.
+- GitHub Actions CI workflow at `.github/workflows/ci.yml` that uses
+  `actions/setup-node@v6` with `node-version-file: .tool-versions`, so
+  CI resolves the exact Node.js version committed in the repo without
+  a separate pin. (asdf is only required locally; setup-node reads the
+  `nodejs` entry out of `.tool-versions` natively, keeping the file as
+  the single source of truth.) Jobs: typecheck, lint, test, build.
 - `README.md` with project goals, a "status: pre-alpha" banner, and a
   quickstart that tells contributors to install `asdf` and run
   `asdf install` before `npm install`.
