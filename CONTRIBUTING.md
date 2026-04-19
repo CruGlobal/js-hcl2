@@ -5,10 +5,12 @@ conventions and toolchain expectations for the repository.
 
 ## Toolchain
 
-This project uses [`asdf`](https://asdf-vm.com/) to pin the exact Node.js
-version used for development and CI. The pinned version is declared in the
-repo-root `.tool-versions` file; contributors must install `asdf`, add the
-Node.js plugin, and run `asdf install` from the repo root before running
+This project pins the exact Node.js version in a repo-root
+`.tool-versions` file. Contributors use [`asdf`](https://asdf-vm.com/)
+to read that file locally; CI uses `actions/setup-node@v6` with
+`node-version-file: .tool-versions`, so local and CI resolve the same
+interpreter from the same single source. Install `asdf`, add the
+Node.js plugin, and run `asdf install` from the repo root before
 `npm install`.
 
 ```sh
@@ -39,6 +41,37 @@ hard-to-debug failures and make PR reviews inconsistent. CI reads the same
 4. Design-level changes require updating
    [`docs/design.md`](docs/design.md) in the same PR. The design doc is
    authoritative; drift between docs and code is a bug.
+
+## Failing-test-first for bug fixes and features
+
+**Bug fixes and feature PRs must lead with a failing test.** Structure
+your commits so the PR history reads:
+
+1. **First commit** — adds a test that reproduces the bug or asserts
+   the new feature's behaviour. CI should fail on this commit alone.
+2. **Subsequent commits** — the fix or implementation, with the test
+   flipping from red to green.
+
+This applies equally to **issue reports**: when filing a bug, include
+a minimal failing test (or the HCL input + expected value / output)
+that demonstrates the problem. Reproducible issues are triaged first.
+
+Why: it proves the behaviour wasn't already covered, documents the
+expected outcome, and prevents regressions. On merge the repo uses
+squash, so the two commits collapse into one on `main` — but the
+reviewing history stays clean.
+
+### Exemptions
+
+The failing-test-first requirement does **not** apply to:
+
+- **Documentation-only changes** (README, docs/**, JSDoc-only edits).
+- **CI / workflow changes** (`.github/**`).
+- **Dependency updates** (Dependabot PRs, manual bumps).
+- **Chore / refactor** PRs that don't change observable behaviour.
+
+If you're unsure which bucket a PR falls into, include a test — it's
+always accepted, even when not required.
 
 ## Code conventions
 
