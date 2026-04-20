@@ -60,23 +60,8 @@ jobs:
       - name: Build
         run: npm run build
 
-      # Currently fails with EPRIVATE because package.json has
-      # `"private": true`. Intentional — it keeps accidental publishes
-      # impossible until the repo is ready to ship. To enable real
-      # publishes:
-      #   1. Remove `"private": true` from package.json.
-      #   2. Add an NPM_TOKEN secret (automation token, granular or
-      #      classic) to the repo with publish rights on the
-      #      @cruglobal scope.
-      #
-      # `--provenance` attaches a signed SLSA attestation to the
-      # package; requires the id-token: write permission above. It is
-      # the recommended setting for all first-party npm publishes as of
-      # npm 9+.
       - name: Publish to npm
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   deploy-docs:
     name: Deploy TypeDoc to GitHub Pages
