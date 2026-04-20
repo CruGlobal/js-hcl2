@@ -5,6 +5,19 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1](https://github.com/CruGlobal/js-hcl2/compare/v0.1.0...v0.1.1) (2026-04-20)
+
+
+### Fixed
+
+* patch serialize-javascript RCE + DoS via npm override ([1b44a05](https://github.com/CruGlobal/js-hcl2/commit/1b44a05159f05155e8587b9e1f574936ac9d412f))
+
+
+### Changed
+
+* bump typescript 5→6, vitest 3→4, eslint 9→10 ([#11](https://github.com/CruGlobal/js-hcl2/issues/11)) ([15a2380](https://github.com/CruGlobal/js-hcl2/commit/15a2380b25efc8adb7567ee98ca1e90fe07b0c05))
+* **deps-dev:** Bump @eslint/js from 9.39.4 to 10.0.1 ([#4](https://github.com/CruGlobal/js-hcl2/issues/4)) ([6a1ea43](https://github.com/CruGlobal/js-hcl2/commit/6a1ea43d07cb71e39e850615c199b723175004c3))
+
 ## [Unreleased]
 
 _Nothing yet._
