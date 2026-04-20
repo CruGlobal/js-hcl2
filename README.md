@@ -3,6 +3,16 @@
 [![npm](https://img.shields.io/npm/v/@cruglobal/js-hcl2.svg)](https://www.npmjs.com/package/@cruglobal/js-hcl2)
 [![license](https://img.shields.io/badge/license-BSD--3--Clause-blue.svg)](LICENSE)
 
+> **Status: AI-generated, not actively maintained.** This library was
+> authored primarily by an AI assistant against the specification in
+> [`docs/design.md`](docs/design.md) and is not on anyone's active
+> roadmap. Dependabot keeps dependencies and security advisories up to
+> date automatically (patch + minor bumps auto-merge; majors require
+> manual review), but feature work, bug fixes, and other changes
+> happen on a best-effort basis. **Pull requests and issues are
+> welcome** — they may take time to be reviewed. See
+> [`CONTRIBUTING.md`](CONTRIBUTING.md) for the contribution workflow.
+
 Parse and encode [HashiCorp Configuration Language v2](https://github.com/hashicorp/hcl) (HCL2)
 in TypeScript. Unlike every other npm HCL2 reader, this library supports both
 directions — reading HCL into JS values *and* emitting HCL from JS values —
