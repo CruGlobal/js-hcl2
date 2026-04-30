@@ -200,8 +200,7 @@ describe("StringifyOptions", () => {
     const out = stringify(
       { keep: 1, drop: 2 },
       {
-        replacer: (_key, val) =>
-          val === 2 ? undefined : (val as Value),
+        replacer: (_key, val) => (val === 2 ? undefined : val),
       },
     );
     expect(out).toBe("keep = 1\n");
@@ -211,7 +210,7 @@ describe("StringifyOptions", () => {
     const out = stringify(
       { n: 10 },
       {
-        replacer: (_k, v) => (typeof v === "number" ? v * 2 : (v as Value)),
+        replacer: (_k, v) => (typeof v === "number" ? v * 2 : v),
       },
     );
     expect(out).toBe("n = 20\n");
@@ -248,10 +247,10 @@ describe("Expression wrappers", () => {
 
 describe("root value validation", () => {
   it("throws on non-object roots", () => {
-    expect(() => stringify(42 as unknown as Value)).toThrow(TypeError);
-    expect(() => stringify("hi" as unknown as Value)).toThrow(TypeError);
-    expect(() => stringify([1, 2] as unknown as Value)).toThrow(TypeError);
-    expect(() => stringify(null as unknown as Value)).toThrow(TypeError);
+    expect(() => stringify(42)).toThrow(TypeError);
+    expect(() => stringify("hi")).toThrow(TypeError);
+    expect(() => stringify([1, 2])).toThrow(TypeError);
+    expect(() => stringify(null)).toThrow(TypeError);
   });
 
   it("accepts an empty object", () => {
