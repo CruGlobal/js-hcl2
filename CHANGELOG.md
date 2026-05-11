@@ -5,6 +5,13 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2](https://github.com/CruGlobal/js-hcl2/compare/v0.1.1...v0.1.2) (2026-04-30)
+
+
+### Changed
+
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#18](https://github.com/CruGlobal/js-hcl2/issues/18)) ([1042e11](https://github.com/CruGlobal/js-hcl2/commit/1042e11bf96f09ea01f0b94bc148ac9b8994378a))
+
 ## [0.1.1](https://github.com/CruGlobal/js-hcl2/compare/v0.1.0...v0.1.1) (2026-04-20)
 
 
