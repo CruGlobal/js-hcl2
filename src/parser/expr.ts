@@ -546,7 +546,11 @@ function parseTupleAfterLBrack(ctx: ExprCursor, lbrack: Token): TupleNode {
 
 function parseObjectOrFor(ctx: ExprCursor): ObjectNode | ForNode {
   const lbrace = ctx.consume(); // LBRACE
-  if (isForKeyword(ctx.peek())) {
+  // Unlike `[ ]`, the lexer keeps newlines inside `{ }` (they separate
+  // object items), so a `for` written on the line after the opening brace
+  // surfaces a NEWLINE before the keyword. Look past it so multi-line
+  // object for-expressions aren't misread as object literals.
+  if (isForKeyword(peekPastNewlines(ctx))) {
     return parseForExpression(ctx, lbrace, true);
   }
   return parseObjectAfterLBrace(ctx, lbrace);
@@ -631,9 +635,18 @@ function parseForExpression(
   openBrace: Token,
   isObject: boolean,
 ): ForNode {
+  const parts: Array<Token | ExprNode> = [openBrace];
+  // Inside an object `{ }`, the lexer emits the newlines of a multi-line
+  // for-expression as real NEWLINE tokens (see `shouldSuppressNewlines`).
+  // They carry no meaning between for-expression grammar elements, so skip
+  // them at every step — threading them into `parts` keeps the round-trip
+  // lossless. Tuple for-expressions never see stray newlines (the lexer
+  // suppresses them inside `[ ]`), so these calls are no-ops there.
+  consumeNewlines(ctx, parts);
   const forToken = ctx.consume(); // IDENT "for"
-  const parts: Array<Token | ExprNode> = [openBrace, forToken];
+  parts.push(forToken);
 
+  consumeNewlines(ctx, parts);
   const firstVar = expectOrSynth(
     ctx,
     TokenKind.IDENT,
@@ -643,8 +656,10 @@ function parseForExpression(
   let keyVar: string | null = null;
   let valueVar = firstVar.lexeme;
 
+  consumeNewlines(ctx, parts);
   if (ctx.peek().kind === TokenKind.COMMA) {
     parts.push(ctx.consume());
+    consumeNewlines(ctx, parts);
     const second = expectOrSynth(
       ctx,
       TokenKind.IDENT,
@@ -653,6 +668,7 @@ function parseForExpression(
     parts.push(second);
     keyVar = firstVar.lexeme;
     valueVar = second.lexeme;
+    consumeNewlines(ctx, parts);
   }
 
   const inTok = ctx.peek();
@@ -662,9 +678,11 @@ function parseForExpression(
     ctx.errorAt(inTok.range, "expected 'in' in for expression");
   }
 
+  consumeNewlines(ctx, parts);
   const collection = parseExpression(ctx);
   parts.push(collection);
 
+  consumeNewlines(ctx, parts);
   const colon = expectOrSynth(
     ctx,
     TokenKind.COLON,
@@ -675,32 +693,40 @@ function parseForExpression(
   let keyExpr: ExprNode | null = null;
   let valueExpr: ExprNode;
   if (isObject) {
+    consumeNewlines(ctx, parts);
     keyExpr = parseExpression(ctx);
     parts.push(keyExpr);
+    consumeNewlines(ctx, parts);
     const arrow = expectOrSynth(
       ctx,
       TokenKind.FATARROW,
       "expected '=>' in object for",
     );
     parts.push(arrow);
+    consumeNewlines(ctx, parts);
     valueExpr = parseExpression(ctx);
     parts.push(valueExpr);
   } else {
+    consumeNewlines(ctx, parts);
     valueExpr = parseExpression(ctx);
     parts.push(valueExpr);
   }
 
+  consumeNewlines(ctx, parts);
   let group = false;
   if (isObject && ctx.peek().kind === TokenKind.ELLIPSIS) {
     group = true;
     parts.push(ctx.consume());
+    consumeNewlines(ctx, parts);
   }
 
   let cond: ExprNode | null = null;
   if (ctx.peek().kind === TokenKind.IDENT && ctx.peek().lexeme === "if") {
     parts.push(ctx.consume());
+    consumeNewlines(ctx, parts);
     cond = parseExpression(ctx);
     parts.push(cond);
+    consumeNewlines(ctx, parts);
   }
 
   const closeBrace = expectOrSynth(
@@ -728,6 +754,30 @@ function parseForExpression(
 
 function isForKeyword(tok: Token): boolean {
   return tok.kind === TokenKind.IDENT && tok.lexeme === "for";
+}
+
+/**
+ * Consume a run of NEWLINE tokens, appending each to `parts` so the source
+ * round-trips byte-for-byte. Used between the grammar elements of a
+ * for-expression, where newlines are insignificant yet — inside an object
+ * `{ }` — still surface as tokens from the lexer.
+ */
+function consumeNewlines(
+  ctx: ExprCursor,
+  parts: Array<Token | ExprNode>,
+): void {
+  while (ctx.peek().kind === TokenKind.NEWLINE) parts.push(ctx.consume());
+}
+
+/**
+ * Peek at the next non-NEWLINE token without consuming anything, so the
+ * object dispatch can spot a `for` keyword sitting on the line after the
+ * opening `{`.
+ */
+function peekPastNewlines(ctx: ExprCursor): Token {
+  let offset = 0;
+  while (ctx.peek(offset).kind === TokenKind.NEWLINE) offset++;
+  return ctx.peek(offset);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
