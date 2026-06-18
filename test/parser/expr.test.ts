@@ -375,6 +375,29 @@ describe("for expressions", () => {
       expect(expr.group).toBe(true);
     }
   });
+
+  // Inside `{ }` the lexer keeps newlines (they separate object items), so
+  // a multi-line object for-expression — the shape `terraform fmt` emits —
+  // surfaces NEWLINE tokens before `for` and between the grammar elements.
+  // These regressed as "expected '=' or ':' in object item" before the
+  // parser learned to skip them (tuple-for never hit this: the lexer
+  // suppresses newlines inside `[ ]`).
+  it("parses a multi-line object-for with the body split across lines", () => {
+    const src = "{\n  for index, app in items :\n  app => index\n}";
+    const expr = expectNoErrors(src);
+    expect(expr.kind).toBe("For");
+    if (expr.kind === "For") {
+      expect(expr.isObject).toBe(true);
+      expect(expr.keyVar).toBe("index");
+      expect(expr.valueVar).toBe("app");
+    }
+  });
+
+  it("round-trips a multi-line object-for byte-for-byte", () => {
+    const src = "{\n  for k, v in m :\n  k => upper(v)\n  if v != \"\"\n}";
+    const expr = expectNoErrors(src);
+    expect(print(expr)).toBe(src);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -510,6 +533,11 @@ const PROPERTY_CASES: string[] = [
   "[for x in xs : x * 2 if x > 0]",
   "{for k, v in m : k => v}",
   "{for k, v in m : k => v...}",
+  // Multi-line object for-expressions: newline after `{`, after `:`, and
+  // before `}` must round-trip through `parts`.
+  "{\n  for k, v in m : k => v\n}",
+  "{\n  for k, v in m :\n  k => v\n}",
+  "{\n  for k, v in m :\n  k => v\n  if v != null\n}",
   '"hello"',
   '"hello ${name}"',
   '"a${b}c${d}e"',
