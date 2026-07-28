@@ -57,6 +57,16 @@ describe("strings — escapes and heredoc promotion", () => {
     expect(stringify({ s: "${foo}" })).toBe('s = "$${foo}"\n');
     expect(stringify({ s: "%{foo}" })).toBe('s = "%%{foo}"\n');
   });
+  it("round-trips a marker doubled before its brace (%%{ / $${)", () => {
+    // Regression: a literal value containing the doubled marker right
+    // before `{` (e.g. `%%{`) escaped to `%%%{`, which the lexer then
+    // mis-segmented as `%%` + `%{`-directive — `parse(stringify(v))`
+    // threw "unknown template directive" / "expected CQUOTE". (Found by
+    // the fuzz idempotence property on certain seeds.)
+    for (const s of ["%%{", "$${", "%%{x}", "$${x}", "a%%{b", "%{%%{", "$$${"]) {
+      expect(parse(stringify({ s })), JSON.stringify(s)).toEqual({ s });
+    }
+  });
   it("promotes to heredoc when a string contains 3+ newlines and ends with \\n", () => {
     const v = { s: "a\nb\nc\nd\n" };
     const out = stringify(v);
