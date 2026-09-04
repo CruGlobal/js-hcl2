@@ -684,17 +684,35 @@ export class Lexer {
         }
       }
 
+      // `$${` / `%%{` are the literal-marker escapes. Consume the whole
+      // three-char sequence as one unit so the trailing `{` can't be
+      // re-read as an interpolation/directive opener. This must be
+      // recognized greedily here — pairing a bare `$$`/`%%` first would
+      // mis-segment `%%%{` (a literal `%` followed by an escaped `%{`) as
+      // `%%` + `%{`-directive, diverging from the unescaper in value.ts,
+      // which collapses exactly `$${`→`${` / `%%{`→`%{` and otherwise
+      // advances one char.
+      if (
+        c === DOLLAR &&
+        this.text.charCodeAt(this.pos + 1) === DOLLAR &&
+        this.text.charCodeAt(this.pos + 2) === LBRACE
+      ) {
+        this.pos += 3;
+        continue;
+      }
+      if (
+        c === PERCENT &&
+        this.text.charCodeAt(this.pos + 1) === PERCENT &&
+        this.text.charCodeAt(this.pos + 2) === LBRACE
+      ) {
+        this.pos += 3;
+        continue;
+      }
+      // A bare `${` / `%{` opens an interpolation / directive.
       if (c === DOLLAR && this.text.charCodeAt(this.pos + 1) === LBRACE) break;
-      if (c === DOLLAR && this.text.charCodeAt(this.pos + 1) === DOLLAR) {
-        // Escaped $$ — consumed as literal, does not open an interpolation.
-        this.pos += 2;
-        continue;
-      }
       if (c === PERCENT && this.text.charCodeAt(this.pos + 1) === LBRACE) break;
-      if (c === PERCENT && this.text.charCodeAt(this.pos + 1) === PERCENT) {
-        this.pos += 2;
-        continue;
-      }
+      // Anything else — including a lone `$` or `%` — is literal content;
+      // it falls through to the single-char advance below.
       if (c === BACKSLASH && mode.heredoc === undefined) {
         // Consume escape sequence as literal (2 chars minimum).
         this.pos += 2;
