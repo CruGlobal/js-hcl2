@@ -39,7 +39,7 @@ Sizing convention:
 - `src/index.ts` with stub exports: `parse`, `stringify`, `parseDocument`
   (each throwing `NotImplementedError` for now).
 - GitHub Actions CI workflow at `.github/workflows/ci.yml` that uses
-  `actions/setup-node@v6` with `node-version-file: .tool-versions`, so
+  `actions/setup-node` with `node-version-file: .tool-versions`, so
   CI resolves the exact Node.js version committed in the repo without
   a separate pin. (asdf is only required locally; setup-node reads the
   `nodejs` entry out of `.tool-versions` natively, keeping the file as

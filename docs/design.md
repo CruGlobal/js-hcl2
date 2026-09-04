@@ -537,7 +537,7 @@ multi-line expressions. This means
   in a committed `.tool-versions` file at the repo root (`nodejs 24.x`
   — latest `24.*` LTS minor at pin time). Locally, contributors use
   [`asdf`](https://asdf-vm.com/) to read that file (`asdf install`).
-  In CI, `actions/setup-node@v6` consumes the same file via its
+  In CI, `actions/setup-node` consumes the same file via its
   `node-version-file` input, so local and CI resolve identically
   without a separate pin. Node.js 24.x is the **development** runtime;
   the shipped library remains runtime-agnostic (see "Targets" above).
