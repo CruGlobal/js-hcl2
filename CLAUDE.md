@@ -69,7 +69,7 @@ implementing:
 - **Node.js 24.x** is the development runtime, pinned via a
   `.tool-versions` file at the repo root. Locally,
   [`asdf`](https://asdf-vm.com/) reads that file (`asdf install` from
-  the repo root before `npm install`). In CI, `actions/setup-node@v6`
+  the repo root before `npm install`). In CI, `actions/setup-node`
   reads the same file via its `node-version-file` input, so local and
   CI Node versions cannot drift. Never pin Node separately in a
   workflow matrix.

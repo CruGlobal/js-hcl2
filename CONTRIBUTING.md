@@ -7,7 +7,7 @@ conventions and toolchain expectations for the repository.
 
 This project pins the exact Node.js version in a repo-root
 `.tool-versions` file. Contributors use [`asdf`](https://asdf-vm.com/)
-to read that file locally; CI uses `actions/setup-node@v6` with
+to read that file locally; CI uses `actions/setup-node` with
 `node-version-file: .tool-versions`, so local and CI resolve the same
 interpreter from the same single source. Install `asdf`, add the
 Node.js plugin, and run `asdf install` from the repo root before
