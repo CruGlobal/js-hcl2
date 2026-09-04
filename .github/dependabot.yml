@@ -23,6 +23,20 @@ updates:
     commit-message:
       prefix: "deps"
       include: "scope"
+    ignore:
+      # @types/node tracks the Node.js major pinned in .tool-versions
+      # (currently 24.x). Bump it by hand together with the runtime pin,
+      # not on Dependabot's cadence — otherwise every new Node major
+      # opens a fresh @types/node PR whose types drift ahead of the
+      # runtime we actually test on.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # TypeScript 7 (the native compiler) isn't supported by the rest
+      # of the toolchain yet: typescript-eslint peer-requires <6.1.0 and
+      # typedoc peer-requires <=6.0.x, so `npm ci` fails with ERESOLVE.
+      # Remove this entry once both declare TS 7 peer support.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
 
   # ──────────────────────────────────────────────────────────────────────────
   # GitHub Actions used by .github/workflows/**. Similar policy: one
