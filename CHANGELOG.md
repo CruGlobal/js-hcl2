@@ -5,6 +5,30 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3](https://github.com/CruGlobal/js-hcl2/compare/v0.1.2...v0.1.3) (2026-09-04)
+
+
+### Fixed
+
+* round-trip a template marker doubled before its brace ([#30](https://github.com/CruGlobal/js-hcl2/issues/30)) ([13921d8](https://github.com/CruGlobal/js-hcl2/commit/13921d843f14896355ccf0c0ddf34183cbb34052))
+
+
+### Changed
+
+* **deps-dev:** align @types/node with the pinned Node 24 runtime ([#53](https://github.com/CruGlobal/js-hcl2/issues/53)) ([43186d2](https://github.com/CruGlobal/js-hcl2/commit/43186d2ef39e94faaa9b11b503a91ef2909a7f93))
+* **deps-dev:** Bump js-yaml from 4.2.0 to 4.3.1 ([#45](https://github.com/CruGlobal/js-hcl2/issues/45)) ([d8d93ec](https://github.com/CruGlobal/js-hcl2/commit/d8d93ec137655e285ed0e9f884df25ccf976300d))
+* **deps-dev:** Bump postcss from 8.5.17 to 8.5.23 ([#42](https://github.com/CruGlobal/js-hcl2/issues/42)) ([4d794a7](https://github.com/CruGlobal/js-hcl2/commit/4d794a759372c5adf950bf07d0871fa2c39f7549))
+* **deps-dev:** Bump the npm-dev-dependencies group with 2 updates ([#40](https://github.com/CruGlobal/js-hcl2/issues/40)) ([2947bb3](https://github.com/CruGlobal/js-hcl2/commit/2947bb3e98a3bd94ef6da22278decd78d2ba1d3e))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#34](https://github.com/CruGlobal/js-hcl2/issues/34)) ([7b37adf](https://github.com/CruGlobal/js-hcl2/commit/7b37adf981985337431a31182b7bb41c8d66a511))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#46](https://github.com/CruGlobal/js-hcl2/issues/46)) ([618a694](https://github.com/CruGlobal/js-hcl2/commit/618a694c929df1a20fc4404d789ac137f8ef3025))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#48](https://github.com/CruGlobal/js-hcl2/issues/48)) ([6ec87f7](https://github.com/CruGlobal/js-hcl2/commit/6ec87f790e42c2705af39a93afe702e0751e662a))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#50](https://github.com/CruGlobal/js-hcl2/issues/50)) ([532c2d3](https://github.com/CruGlobal/js-hcl2/commit/532c2d33c992d1235eb5ff040e0abf1dc7401a81))
+* **deps-dev:** Bump the npm-dev-dependencies group with 4 updates ([#32](https://github.com/CruGlobal/js-hcl2/issues/32)) ([7005833](https://github.com/CruGlobal/js-hcl2/commit/70058333b7f1455f14992fbe34c3c31b1f8cb0c4))
+* **deps-dev:** Bump the npm-dev-dependencies group with 4 updates ([#41](https://github.com/CruGlobal/js-hcl2/issues/41)) ([77905a7](https://github.com/CruGlobal/js-hcl2/commit/77905a7267a3666ecd9b4e34f3c8e763f739725b))
+* **deps-dev:** Bump the npm-dev-dependencies group with 7 updates ([#36](https://github.com/CruGlobal/js-hcl2/issues/36)) ([a46a75d](https://github.com/CruGlobal/js-hcl2/commit/a46a75dfee97a9439a7189e9db43c0d69b37d37e))
+* **deps-dev:** Bump typescript-eslint from 8.65.0 to 8.66.0 in the npm-dev-dependencies group ([#44](https://github.com/CruGlobal/js-hcl2/issues/44)) ([e87c371](https://github.com/CruGlobal/js-hcl2/commit/e87c3710c5ee0a417e32a675e6bbfb14570d3763))
+* **deps:** Bump brace-expansion ([#49](https://github.com/CruGlobal/js-hcl2/issues/49)) ([202a6cb](https://github.com/CruGlobal/js-hcl2/commit/202a6cbde58d3821f85d742ff41ceb06e84cf4e6))
+
 ## [0.1.2](https://github.com/CruGlobal/js-hcl2/compare/v0.1.1...v0.1.2) (2026-06-18)
 
 
