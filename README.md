@@ -245,7 +245,7 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Line comments (`#`, `//`)                              | ✅        |       |
 | Block comments (`/* … */`)                             | ✅        |       |
 | Primitive literals: number, bool, `null`, string       | ✅        | Numbers are finite JS doubles; NaN/Infinity encode as `null` on emit. |
-| Quoted strings with escapes (`\n \t \" \\ \uNNNN`)     | ✅        |       |
+| Quoted strings with escapes (`\n \t \" \\ \uNNNN`)     | ✅        | Only the escapes HCL defines: `\n \r \t \" \\ \uNNNN \UNNNNNNNN`. Any other backslash escape is a parse error, as in Terraform. Heredoc bodies keep `\` as plain text. |
 | Heredocs (`<<EOT … EOT`)                               | ✅        |       |
 | Heredoc strip form (`<<-EOT`)                          | ✅        | Recognised structurally; body content stored verbatim (strip happens at evaluation time — see below). |
 | Tuple and object literals (with trailing commas)       | ✅        |       |

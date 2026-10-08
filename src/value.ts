@@ -386,8 +386,9 @@ export function unescapeTemplateLiteral(raw: string, isHeredoc: boolean): string
           break;
         }
       }
-      // Unknown backslash escape — pass through as-is (matches the
-      // lenient behavior of hcl2-json-parser for unrecognized escapes).
+      // Unknown backslash escape: pass it through as-is. The parser
+      // rejects these before a Value is built, so only direct callers of
+      // this exported helper reach this path.
       out += raw[i]!;
       i += 1;
       continue;
