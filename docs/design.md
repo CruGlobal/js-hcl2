@@ -258,7 +258,11 @@ column).
 
 Grouped to match the HCL2 spec:
 
-- **Literals**: `NUMBER`, `IDENT`.
+- **Literals**: `NUMBER`, `IDENT`. An `IDENT` matches hashicorp/hcl's
+  scanner rule `(ID_Start | '_') (ID_Continue | '-')*`: UAX #31 plus a
+  leading `_` and a continuing `-`. The prose spec leaves out the `_`, but
+  the reference scanner (and so Terraform) accepts it, for example
+  `aws_route53_record._46fe` or `for _, v in xs`.
 - **Punctuation**: `LBRACE`, `RBRACE`, `LBRACK`, `RBRACK`, `LPAREN`,
   `RPAREN`, `COMMA`, `DOT`, `ELLIPSIS`, `COLON`, `QUESTION`, `FATARROW`.
 - **Operators**: `PLUS`, `MINUS`, `STAR`, `SLASH`, `PERCENT`, `EQ`, `NEQ`,

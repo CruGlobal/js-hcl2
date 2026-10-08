@@ -259,7 +259,7 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Template interpolation (`${…}`) in strings + heredocs  | ✅        |       |
 | Template control directives (`%{if}`, `%{for}`)        | ✅        |       |
 | Strip markers (`${~ ~}`, `%{~ ~}`)                     | ✅        |       |
-| Unicode identifiers (UAX #31) + dash in ID_Continue    | ✅        |       |
+| Unicode identifiers (UAX #31) + dash in ID_Continue    | ✅        | An identifier may also start with `_`, as in HCL's reference scanner (`_`, `_46fe`, `for _, v in ...`). |
 
 ### Out of scope for v0.x
 

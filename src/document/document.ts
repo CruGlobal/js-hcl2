@@ -33,7 +33,10 @@ import type {
   Node,
 } from "../parser/nodes.js";
 import { print } from "../parser/print.js";
-import { stringifyExpression } from "../printer/canonical.js";
+import {
+  isValidIdentifier,
+  stringifyExpression,
+} from "../printer/canonical.js";
 import { toValue, type Value } from "../value.js";
 
 export interface DocumentOptions {
@@ -406,9 +409,7 @@ function insertAttribute(
   // stringifyExpression keeps object-typed values as object literals
   // rather than letting the body-level block-vs-attribute policy kick
   // in and emit them as blocks.
-  const keyText = /^[A-Za-z\u00A0-\uFFFF][A-Za-z0-9\u00A0-\uFFFF_-]*$/.test(name)
-    ? name
-    : JSON.stringify(name);
+  const keyText = isValidIdentifier(name) ? name : JSON.stringify(name);
   const exprText = stringifyExpression(value);
   const attrSource = `${keyText} = ${exprText}`;
   const scaffolded = `${attrSource}\n`;
