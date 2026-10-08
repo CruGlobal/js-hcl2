@@ -73,6 +73,21 @@ describe("primitive value collapse", () => {
   });
 });
 
+describe("identifiers that start with an underscore", () => {
+  it("collapses underscore-led attribute and block names", () => {
+    expect(parseOK('_a = 1\n_blk "l" {\n  _b = true\n}\n')).toEqual({
+      _a: 1,
+      _blk: { l: { _b: true } },
+    });
+  });
+  it("wraps an underscore-led traversal as an expression", () => {
+    const v = expectExpression(
+      parseOK("to = aws_route53_record._46fe0a1b\n").to,
+    );
+    expect(v.source).toBe("aws_route53_record._46fe0a1b");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Collections
 // ─────────────────────────────────────────────────────────────────────────────

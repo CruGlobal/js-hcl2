@@ -296,6 +296,46 @@ describe("invalid escape sequences in quoted strings", () => {
   });
 });
 
+describe("identifiers that start with an underscore", () => {
+  // bail: true, so a regression fails on the first error rather than
+  // running `{ ... }` recovery on an INVALID token.
+  function expectStrictRoundTrip(input: string) {
+    const { body } = parse(new SourceFile(input));
+    expect(print(body)).toBe(input);
+  }
+
+  it.each([
+    ["variable", "a = _foo\n"],
+    ["bare underscore", "a = _\n"],
+    [
+      "traversal step (import block target)",
+      "to = aws_route53_record._46fe0a1b_example_org_A\n",
+    ],
+    ["splat traversal", "a = x[*]._y\n"],
+    ["attribute name", "_b = 1\n"],
+    ["block type", "_blk {\n  _attr = 1\n}\n"],
+    ["bare block label", "resource _lbl {}\n"],
+    ["object key", "a = { _k = 1 }\n"],
+    ["function name", "a = _f(1)\n"],
+    ["for-expression key and value", "a = [for _, _v in xs : _v]\n"],
+    ["for-expression object form", "a = { for _k, v in m : _k => v }\n"],
+    ["template for directive", 'a = "%{ for _, s in xs }${s}%{ endfor }"\n'],
+    ["template interpolation", 'a = "${_x}"\n'],
+    ["heredoc delimiter", "a = <<_EOT\nhi\n_EOT\n"],
+    ["indented heredoc delimiter", "a = <<-_EOT\n  hi\n  _EOT\n"],
+  ])("parses a leading underscore: %s", (_ctx, input) => {
+    expectStrictRoundTrip(input);
+  });
+
+  it("parses a Terraform import block with an underscore resource name", () => {
+    const input =
+      'import {\n  to = aws_route53_record._46fe0a1b\n  id = "Z123_example.org_A"\n}\n';
+    const { body } = parse(new SourceFile(input));
+    expect(body.blocks[0]!.type).toBe("import");
+    expect(print(body)).toBe(input);
+  });
+});
+
 describe("round-trip property", () => {
   const cases: Array<{ name: string; input: string }> = [
     { name: "empty file", input: "" },

@@ -31,8 +31,6 @@ describe("per token kind", () => {
     { input: "foo", kind: TokenKind.IDENT },
     { input: "foo-bar", kind: TokenKind.IDENT },
     { input: "_underscore", kind: TokenKind.IDENT, lexeme: "_underscore" },
-    // ^ underscore is NOT UAX #31 ID_Start, so this should NOT be IDENT.
-    //   We verify the negative below.
     // Punctuation
     { input: "{", kind: TokenKind.LBRACE },
     { input: "}", kind: TokenKind.RBRACE },
@@ -68,8 +66,6 @@ describe("per token kind", () => {
   ];
 
   for (const { input, kind } of cases) {
-    // Skip the underscore case — it's a negative test handled below.
-    if (input === "_underscore") continue;
     it(`lexes ${JSON.stringify(input)} as ${kind}`, () => {
       const [first] = tokens(input);
       expect(first?.kind).toBe(kind);
@@ -77,13 +73,30 @@ describe("per token kind", () => {
     });
   }
 
-  it("rejects underscore as the start of an identifier (not in UAX #31 ID_Start)", () => {
-    // "_" → INVALID (single char), then "underscore" → IDENT.
-    const ts = tokens("_underscore");
-    expect(ts[0]?.kind).toBe(TokenKind.INVALID);
-    expect(ts[0]?.error).toBeDefined();
-    expect(ts[1]?.kind).toBe(TokenKind.IDENT);
-    expect(ts[1]?.lexeme).toBe("underscore");
+  // HCL's reference scanner defines Ident = (ID_Start | '_') (ID_Continue | '-')*,
+  // so an identifier may start with '_' even though '_' is not UAX #31 ID_Start.
+  it.each(["_", "_underscore", "__x", "_46fe0a1b", "_-x"])(
+    "lexes %j as a single IDENT (leading underscore)",
+    (input) => {
+      const ts = tokens(input);
+      expect(ts.map((t) => t.kind)).toEqual([TokenKind.IDENT, TokenKind.EOF]);
+      expect(ts[0]?.lexeme).toBe(input);
+    },
+  );
+
+  it("lexes a traversal step that starts with an underscore", () => {
+    const ts = tokens("aws_route53_record._46fe0a1b");
+    expect(ts.map((t) => [t.kind, t.lexeme])).toEqual([
+      [TokenKind.IDENT, "aws_route53_record"],
+      [TokenKind.DOT, "."],
+      [TokenKind.IDENT, "_46fe0a1b"],
+      [TokenKind.EOF, ""],
+    ]);
+  });
+
+  it("still rejects a leading digit or hyphen", () => {
+    expect(tokens("1abc")[0]?.kind).toBe(TokenKind.NUMBER);
+    expect(tokens("-abc")[0]?.kind).toBe(TokenKind.MINUS);
   });
 
   it("appends EOF to every stream", () => {
@@ -448,6 +461,18 @@ describe("heredocs", () => {
     expect(bad.map((t) => t.lexeme)).toEqual(["\\q"]);
     expect(bad[0]!.range.start.line).toBe(2);
     expect(bad[0]!.range.start.column).toBe(8);
+  });
+
+  it("accepts a heredoc delimiter that starts with an underscore", () => {
+    expect(kindsOnly("x = <<_EOT\nhi\n_EOT\n")).toEqual([
+      TokenKind.IDENT,
+      TokenKind.ASSIGN,
+      TokenKind.HEREDOC_BEGIN,
+      TokenKind.QUOTED_LIT,
+      TokenKind.HEREDOC_END,
+      TokenKind.NEWLINE,
+      TokenKind.EOF,
+    ]);
   });
 
   it("falls back to two LT tokens when <<... doesn't form a heredoc", () => {
