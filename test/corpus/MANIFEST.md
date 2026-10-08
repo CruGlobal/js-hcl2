@@ -54,9 +54,9 @@ npm (`package.json#files` and `.npmignore` exclude `test/`).
   error-recovery paths:
   - `specsuite_tests_*` from hashicorp/hcl (MPL-2.0), for spec-defined
     "must be an error" cases.
-  - `missing_equals.hcl`, `stray_symbol.hcl`, `unterminated_string.hcl`
-    hand-written by this repository (BSD-3-Clause), for targeted error
-    shapes.
+  - `missing_equals.hcl`, `stray_symbol.hcl`, `unterminated_string.hcl`,
+    `invalid_escape.hcl` hand-written by this repository (BSD-3-Clause),
+    for targeted error shapes.
 - The corpus runner expects these to produce at least one parse error
   when parsed with `bail: false`.
 

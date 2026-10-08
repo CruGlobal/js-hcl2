@@ -234,6 +234,68 @@ describe("error recovery", () => {
   });
 });
 
+describe("invalid escape sequences in quoted strings", () => {
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it("reports the escape Terraform rejects, at the backslash", () => {
+    const input = 'a = "ends with a backslash \\. more"\n';
+    const errors = errorsOf(input);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/^invalid escape sequence: '\\\.'/);
+    expect(errors[0]!.line).toBe(1);
+    expect(errors[0]!.column).toBe(input.indexOf("\\") + 1);
+  });
+
+  it("throws on the first invalid escape when bail is true (default)", () => {
+    expect(() => parse(new SourceFile('a = "x\\qy"\n'))).toThrow(
+      /invalid escape sequence/,
+    );
+  });
+
+  it.each([
+    ["attribute value", 'a = "x\\qy"\n'],
+    ["block label", 'block "la\\qbel" {}\n'],
+    ["second block label", 'resource "t" "n\\q" {}\n'],
+    ["object key", 'a = { "k\\q" = 1 }\n'],
+    ["object value", 'a = { k = "v\\q" }\n'],
+    ["tuple item", 'a = ["x", "y\\q"]\n'],
+    ["function argument", 'a = f("x\\q")\n'],
+    ["quoted string inside an interpolation", 'a = "${"x\\qy"}"\n'],
+    ["text next to an interpolation", 'a = "${x}\\q"\n'],
+    ["if-directive body", 'a = "%{ if c }x\\qy%{ endif }"\n'],
+    ["else-directive body", 'a = "%{ if c }x%{ else }\\q%{ endif }"\n'],
+    ["for-directive body", 'a = "%{ for v in vs }\\q%{ endfor }"\n'],
+    ["quoted string in a heredoc interpolation", 'a = <<EOT\n${"x\\q"}\nEOT\n'],
+    ["for-expression", 'a = [for v in vs : "x\\q"]\n'],
+    ["conditional", 'a = c ? "x\\q" : "y"\n'],
+  ])("reports an invalid escape: %s", (_ctx, input) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(
+        /^invalid escape sequence: '\\q' is not a valid escape/,
+      ),
+    ]);
+  });
+
+  it("accepts every escape HCL defines", () => {
+    parseOK('a = "\\n\\r\\t\\"\\\\\\u00e9\\U0001F389$${x}%%{y}"\n');
+  });
+
+  it("accepts backslashes in heredoc bodies as plain text", () => {
+    expectRoundTrip("a = <<EOT\nC:\\path\\. \\q \\u00e\nEOT\n");
+    expectRoundTrip("a = <<-EOT\n  \\d+\\.\\d+\n  EOT\n");
+  });
+
+  it("keeps the CST lossless when recovering from an invalid escape", () => {
+    const input = 'a = "x\\qy${z}\\.w"\nblock "l\\q" {}\n';
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(3);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("round-trip property", () => {
   const cases: Array<{ name: string; input: string }> = [
     { name: "empty file", input: "" },

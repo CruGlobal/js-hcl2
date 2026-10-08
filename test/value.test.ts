@@ -58,6 +58,19 @@ describe("primitive value collapse", () => {
       s: "${foo}\n",
     });
   });
+  it("rejects a backslash escape HCL does not define, like terraform does", () => {
+    const src = 's = "ends with a backslash \\. more"\n';
+    expect(() => parse(src)).toThrow(HCLParseError);
+    expect(() => parse(src)).toThrow(/invalid escape sequence: '\\\.'/);
+    expect(() => HCL.parseDocument(src)).toThrow(HCLParseError);
+  });
+  it("rejects \\u / \\U escapes with the wrong digit count or no character", () => {
+    for (const esc of ["\\u00e", "\\U0001F38", "\\uD800", "\\U00110000"]) {
+      expect(() => parse(`s = "${esc}"\n`), esc).toThrow(
+        /invalid escape sequence/,
+      );
+    }
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

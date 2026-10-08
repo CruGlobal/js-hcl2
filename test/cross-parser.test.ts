@@ -28,6 +28,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join, relative } from "node:path";
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import hcl2JsonParser from "hcl2-json-parser";
 interface Hcl2JsonParser {
@@ -127,4 +128,66 @@ describe("cross-parser: hcl2-json-parser", () => {
       }
     });
   }
+});
+
+// Quoted strings and heredoc bodies built from escape-heavy fragments, so
+// both parsers must agree on which backslash escapes are valid. A raw
+// newline is left out: js-hcl2 still accepts one inside a quoted string,
+// which HCL rejects.
+const ESCAPE_FRAGMENTS = [
+  "\\",
+  "\\",
+  "\\",
+  "n",
+  "r",
+  "t",
+  "u",
+  "U",
+  '\\"',
+  "\\\\",
+  "0",
+  "9",
+  "a",
+  "A",
+  "f",
+  "F",
+  "D",
+  "8",
+  "g",
+  "$",
+  "%",
+  "{",
+  "}",
+  "${x}",
+  "$${",
+  "%%{",
+  ".",
+  " ",
+  "é",
+  "😀",
+  "\t",
+];
+
+describe("property: escape handling agrees with hcl2-json-parser", () => {
+  const body = fc
+    .array(fc.constantFrom(...ESCAPE_FRAGMENTS), { minLength: 1, maxLength: 8 })
+    .map((parts) => parts.join(""));
+  const source = fc.oneof(
+    body.map((b) => `a = "${b}"\n`),
+    body.map((b) => `a = <<EOT\n${b}\nEOT\n`),
+  );
+
+  it("accepts and rejects the same strings over 300 generated inputs", async () => {
+    await fc.assert(
+      fc.asyncProperty(source, async (src) => {
+        const theirs = await runTheirs(src);
+        const ours = runOurs(src);
+        expect(
+          ours.ok,
+          `${JSON.stringify(src)}: theirs=${theirs.ok ? "ok" : theirs.error}, ours=${ours.ok ? "ok" : ours.error}`,
+        ).toBe(theirs.ok);
+      }),
+      { numRuns: 300 },
+    );
+  });
 });

@@ -269,6 +269,130 @@ describe("strings and templates", () => {
   });
 });
 
+describe("quoted-string escape sequences", () => {
+  /** Kind + lexeme of every token between OQUOTE and CQUOTE. */
+  function inner(input: string): Array<[TokenKind, string]> {
+    const ts = tokens(input);
+    expect(ts[0]?.kind).toBe(TokenKind.OQUOTE);
+    const close = ts.findIndex((t) => t.kind === TokenKind.CQUOTE);
+    expect(close).toBeGreaterThan(0);
+    return ts.slice(1, close).map((t) => [t.kind, t.lexeme]);
+  }
+
+  // The only backslash escapes HCL defines (hclsyntax spec, "Template
+  // Expressions"). \u needs exactly 4 hex digits and \U exactly 8.
+  it.each([
+    "\\n",
+    "\\r",
+    "\\t",
+    '\\"',
+    "\\\\",
+    "\\u00e9",
+    "\\u00E9",
+    "\\U0001F389",
+    "\\u00e9ab", // hex after the 4th digit is plain text
+    "\\\\.", // an escaped backslash, then a plain '.'
+    "\\\\q",
+    'a\\nb\\tc\\\\d\\"e',
+  ])("keeps valid escape %j inside one QUOTED_LIT", (body) => {
+    expect(inner(`"${body}"`)).toEqual([[TokenKind.QUOTED_LIT, body]]);
+  });
+
+  it.each<[string, string, RegExp]>([
+    ["\\.", "\\.", /'\\\.' is not a valid escape/],
+    ["\\q", "\\q", /'\\q' is not a valid escape/],
+    ["\\$", "\\$", /'\\\$' is not a valid escape/],
+    ["\\%", "\\%", /'\\%' is not a valid escape/],
+    ["\\a", "\\a", /'\\a' is not a valid escape/],
+    ["\\0", "\\0", /'\\0' is not a valid escape/],
+    ["\\\t", "\\\t", /'\\' followed by U\+0009 is not a valid escape/],
+    ["\\é", "\\é", /'\\é' is not a valid escape/],
+    ["\\😀", "\\😀", /'\\😀' is not a valid escape/],
+    ["\\u", "\\u", /\\u must be followed by four hexadecimal digits/],
+    ["\\u00e", "\\u00e", /\\u must be followed by four hexadecimal digits/],
+    ["\\u{1F600}", "\\u", /\\u must be followed by four hexadecimal digits/],
+    [
+      "\\U0001F38",
+      "\\U0001F38",
+      /\\U must be followed by eight hexadecimal digits/,
+    ],
+    ["\\U00e9", "\\U00e9", /\\U must be followed by eight hexadecimal digits/],
+    ["\\uD800", "\\uD800", /cannot encode U\+D800/],
+    ["\\uDFFF", "\\uDFFF", /cannot encode U\+DFFF/],
+    ["\\U0000D800", "\\U0000D800", /cannot encode U\+D800/],
+    ["\\U00110000", "\\U00110000", /cannot encode U\+110000/],
+    ["\\UFFFFFFFF", "\\UFFFFFFFF", /cannot encode U\+FFFFFFFF/],
+  ])("emits INVALID for escape %j", (body, lexeme, message) => {
+    const ts = tokens(`"${body}"`);
+    const bad = ts.find((t) => t.kind === TokenKind.INVALID);
+    expect(bad, `no INVALID token for ${JSON.stringify(body)}`).toBeDefined();
+    expect(bad!.lexeme).toBe(lexeme);
+    expect(bad!.error).toMatch(/^invalid escape sequence/);
+    expect(bad!.error).toMatch(message);
+    // The bad sequence starts right after the opening quote.
+    expect(bad!.range.start.column).toBe(2);
+  });
+
+  it("splits the literal around an invalid escape", () => {
+    expect(inner('"ends with a backslash \\. more"')).toEqual([
+      [TokenKind.QUOTED_LIT, "ends with a backslash "],
+      [TokenKind.INVALID, "\\."],
+      [TokenKind.QUOTED_LIT, " more"],
+    ]);
+  });
+
+  it("reports every invalid escape in a string", () => {
+    expect(inner('"\\q\\n\\z"')).toEqual([
+      [TokenKind.INVALID, "\\q"],
+      [TokenKind.QUOTED_LIT, "\\n"],
+      [TokenKind.INVALID, "\\z"],
+    ]);
+  });
+
+  it("does not let '\\$' open an interpolation", () => {
+    // `\$` is one (invalid) escape, so the `{` after it is plain text.
+    expect(inner('"\\${x}"')).toEqual([
+      [TokenKind.INVALID, "\\$"],
+      [TokenKind.QUOTED_LIT, "{x}"],
+    ]);
+  });
+
+  it("still opens an interpolation after an escaped backslash", () => {
+    expect(inner('"\\\\${x}"').map(([k]) => k)).toEqual([
+      TokenKind.QUOTED_LIT,
+      TokenKind.TEMPLATE_INTERP,
+      TokenKind.IDENT,
+      TokenKind.TEMPLATE_SEQ_END,
+    ]);
+  });
+
+  it("flags a backslash right before a raw newline or the end of input", () => {
+    const nl = tokens('"a\\\nb"').find((t) => t.kind === TokenKind.INVALID);
+    expect(nl?.lexeme).toBe("\\");
+    expect(nl?.error).toMatch(
+      /backslash must be followed by an escape character/,
+    );
+    const eof = tokens('"a\\').find((t) => t.kind === TokenKind.INVALID);
+    expect(eof?.lexeme).toBe("\\");
+  });
+
+  it("validates escapes in a quoted string nested in an interpolation", () => {
+    const ts = tokens('x = "${"a\\qb"}"');
+    const bad = ts.filter((t) => t.kind === TokenKind.INVALID);
+    expect(bad.map((t) => t.lexeme)).toEqual(["\\q"]);
+  });
+
+  it("validates escapes in the body of a template directive", () => {
+    const ts = tokens('x = "%{ if c }a\\qb%{ endif }"');
+    const bad = ts.filter((t) => t.kind === TokenKind.INVALID);
+    expect(bad.map((t) => t.lexeme)).toEqual(["\\q"]);
+  });
+
+  it("keeps the lex-rejoin invariant across invalid escapes", () => {
+    expectRejoin('x = "a\\.b\\u00e\\uD800\\😀c"\ny = "\\\n"\n');
+  });
+});
+
 describe("heredocs", () => {
   it("emits HEREDOC_BEGIN / QUOTED_LIT / HEREDOC_END for a simple heredoc", () => {
     const src = "x = <<FOO\nline1\nline2\nFOO\n";
@@ -307,6 +431,23 @@ describe("heredocs", () => {
       TokenKind.NEWLINE,
       TokenKind.EOF,
     ]);
+  });
+
+  it("treats backslashes in a heredoc body as plain text", () => {
+    const src = "x = <<EOT\nC:\\path\\. \\q \\u00e \\uD800\nEOT\n";
+    const ts = tokens(src);
+    expect(ts.some((t) => t.kind === TokenKind.INVALID)).toBe(false);
+    const lit = ts.find((t) => t.kind === TokenKind.QUOTED_LIT);
+    expect(lit?.lexeme).toBe("C:\\path\\. \\q \\u00e \\uD800\n");
+  });
+
+  it("validates a quoted string inside a heredoc interpolation", () => {
+    const ts = tokens('x = <<EOT\n\\q ${"a\\qb"}\nEOT\n');
+    const bad = ts.filter((t) => t.kind === TokenKind.INVALID);
+    // Only the quoted string's `\q` is an error; the heredoc's is text.
+    expect(bad.map((t) => t.lexeme)).toEqual(["\\q"]);
+    expect(bad[0]!.range.start.line).toBe(2);
+    expect(bad[0]!.range.start.column).toBe(8);
   });
 
   it("falls back to two LT tokens when <<... doesn't form a heredoc", () => {
