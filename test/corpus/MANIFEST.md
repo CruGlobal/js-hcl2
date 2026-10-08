@@ -39,9 +39,10 @@ npm (`package.json#files` and `.npmignore` exclude `test/`).
 ## `handwritten/` — BSD-3-Clause
 
 - **Author:** this repository. No external license obligations.
-- **Contents:** seven hand-crafted fixtures that exercise patterns
+- **Contents:** eight hand-crafted fixtures that exercise patterns
   underrepresented in the vendored sets — complex comment trivia,
-  unicode identifiers and string content, every heredoc variant,
+  unicode identifiers and string content, identifiers that start with
+  an underscore, every heredoc variant,
   nested interpolation + template directives, every expression form
   (operators / collections / traversals / splats / for-expressions /
   splats), a realistic Terraform-shaped module, and assorted edge
@@ -54,9 +55,9 @@ npm (`package.json#files` and `.npmignore` exclude `test/`).
   error-recovery paths:
   - `specsuite_tests_*` from hashicorp/hcl (MPL-2.0), for spec-defined
     "must be an error" cases.
-  - `missing_equals.hcl`, `stray_symbol.hcl`, `unterminated_string.hcl`
-    hand-written by this repository (BSD-3-Clause), for targeted error
-    shapes.
+  - `missing_equals.hcl`, `stray_symbol.hcl`, `unterminated_string.hcl`,
+    `invalid_escape.hcl` hand-written by this repository (BSD-3-Clause),
+    for targeted error shapes.
 - The corpus runner expects these to produce at least one parse error
   when parsed with `bail: false`.
 

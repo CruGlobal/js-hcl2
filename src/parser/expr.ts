@@ -806,14 +806,8 @@ function parseTemplateBody(
   while (!ctx.atEnd()) {
     const tok = ctx.peek();
     if (tok.kind === endKind) break;
-    if (tok.kind === TokenKind.QUOTED_LIT) {
-      const strTok = ctx.consume();
-      const part: TemplateStringPart = {
-        kind: "StringPart",
-        range: strTok.range,
-        parts: [strTok],
-        text: strTok.lexeme,
-      };
+    if (tok.kind === TokenKind.QUOTED_LIT || tok.kind === TokenKind.INVALID) {
+      const part = parseStringPart(ctx);
       parts.push(part);
       templateParts.push(part);
       continue;
@@ -1105,16 +1099,29 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
   };
 }
 
+/**
+ * Consume a run of literal text in a template body. Inside a template the
+ * lexer emits INVALID only for a backslash escape HCL does not define:
+ * report it, then keep its text as a literal part so the CST stays
+ * complete and still prints back byte for byte.
+ */
+function parseStringPart(ctx: ExprCursor): TemplateStringPart {
+  const strTok = ctx.consume();
+  if (strTok.kind === TokenKind.INVALID) {
+    ctx.errorAt(strTok.range, strTok.error ?? "invalid template text");
+  }
+  return {
+    kind: "StringPart",
+    range: strTok.range,
+    parts: [strTok],
+    text: strTok.lexeme,
+  };
+}
+
 function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | null {
   const tok = ctx.peek();
-  if (tok.kind === TokenKind.QUOTED_LIT) {
-    const strTok = ctx.consume();
-    return {
-      kind: "StringPart",
-      range: strTok.range,
-      parts: [strTok],
-      text: strTok.lexeme,
-    };
+  if (tok.kind === TokenKind.QUOTED_LIT || tok.kind === TokenKind.INVALID) {
+    return parseStringPart(ctx);
   }
   if (tok.kind === TokenKind.TEMPLATE_INTERP) {
     return parseInterpolationPart(ctx);

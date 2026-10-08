@@ -276,9 +276,17 @@ export class Parser {
             parts.push(this.consume());
             break;
           }
-          if (inner.kind === TokenKind.QUOTED_LIT) {
+          if (
+            inner.kind === TokenKind.QUOTED_LIT ||
+            inner.kind === TokenKind.INVALID
+          ) {
+            // INVALID here is a bad backslash escape: report it and keep
+            // its text so the label and the CST stay complete.
             literalParts.push(inner.lexeme);
             parts.push(this.consume());
+            if (inner.kind === TokenKind.INVALID) {
+              this.errorAt(inner.range, inner.error ?? "invalid label text");
+            }
             continue;
           }
           if (

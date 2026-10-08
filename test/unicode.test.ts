@@ -75,6 +75,13 @@ describe("isIdStart / isIdContinue (spec-anchored cases)", () => {
     expect(isIdContinue(HYPHEN)).toBe(true);
   });
 
+  it("accepts the HCL underscore extension in ID_Start", () => {
+    // U+005F LOW LINE is ID_Continue but not UAX #31 ID_Start; HCL's
+    // reference scanner allows it to start an identifier anyway.
+    expect(isIdStart(0x5f)).toBe(true);
+    expect(isIdContinue(0x5f)).toBe(true);
+  });
+
   it("rejects ASCII punctuation and whitespace that aren't identifier chars", () => {
     const cps = [0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x28, 0x29, 0x2b, 0x2f];
     for (const cp of cps) {

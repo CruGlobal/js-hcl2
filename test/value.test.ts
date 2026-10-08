@@ -58,6 +58,34 @@ describe("primitive value collapse", () => {
       s: "${foo}\n",
     });
   });
+  it("rejects a backslash escape HCL does not define, like terraform does", () => {
+    const src = 's = "ends with a backslash \\. more"\n';
+    expect(() => parse(src)).toThrow(HCLParseError);
+    expect(() => parse(src)).toThrow(/invalid escape sequence: '\\\.'/);
+    expect(() => HCL.parseDocument(src)).toThrow(HCLParseError);
+  });
+  it("rejects \\u / \\U escapes with the wrong digit count or no character", () => {
+    for (const esc of ["\\u00e", "\\U0001F38", "\\uD800", "\\U00110000"]) {
+      expect(() => parse(`s = "${esc}"\n`), esc).toThrow(
+        /invalid escape sequence/,
+      );
+    }
+  });
+});
+
+describe("identifiers that start with an underscore", () => {
+  it("collapses underscore-led attribute and block names", () => {
+    expect(parseOK('_a = 1\n_blk "l" {\n  _b = true\n}\n')).toEqual({
+      _a: 1,
+      _blk: { l: { _b: true } },
+    });
+  });
+  it("wraps an underscore-led traversal as an expression", () => {
+    const v = expectExpression(
+      parseOK("to = aws_route53_record._46fe0a1b\n").to,
+    );
+    expect(v.source).toBe("aws_route53_record._46fe0a1b");
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

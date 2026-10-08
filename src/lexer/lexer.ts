@@ -714,9 +714,24 @@ export class Lexer {
       // Anything else — including a lone `$` or `%` — is literal content;
       // it falls through to the single-char advance below.
       if (c === BACKSLASH && mode.heredoc === undefined) {
-        // Consume escape sequence as literal (2 chars minimum).
-        this.pos += 2;
-        continue;
+        // Quoted strings only: heredoc bodies treat `\` as plain text.
+        const escape = scanEscape(this.text, this.pos);
+        if (escape.error === undefined) {
+          this.pos += escape.length;
+          continue;
+        }
+        // An escape HCL does not define. End the literal here so the bad
+        // sequence gets its own INVALID token on the next call.
+        if (this.pos > lexemeStart) break;
+        this.pos += escape.length;
+        return this.make(
+          TokenKind.INVALID,
+          leadingStart,
+          lexemeStart,
+          this.pos,
+          this.pos,
+          escape.error,
+        );
       }
       this.pos++;
     }
@@ -808,6 +823,78 @@ export class Lexer {
 
 function isDigit(c: number): boolean {
   return c >= 0x30 && c <= 0x39;
+}
+
+function isHexDigit(c: number): boolean {
+  return isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
+}
+
+const VALID_ESCAPES =
+  'HCL allows \\n, \\r, \\t, \\", \\\\, \\uNNNN and \\UNNNNNNNN; ' +
+  "write \\\\ for a literal backslash";
+
+/**
+ * Measure the backslash escape that starts at `at` in a quoted string and
+ * check it against the escapes HCL defines (hclsyntax spec, "Template
+ * Expressions"): `\n \r \t \" \\`, `\u` + exactly 4 hex digits, and `\U` +
+ * exactly 8 hex digits naming a Unicode scalar value. `length` is how much
+ * the escape spans, valid or not, so the caller can step over it; `error`
+ * is set when terraform would reject it as an invalid escape sequence.
+ */
+function scanEscape(
+  text: string,
+  at: number,
+): { length: number; error?: string } {
+  const next = text.codePointAt(at + 1);
+  if (next === undefined || next === LF || next === CR) {
+    return {
+      length: 1,
+      error:
+        "invalid escape sequence: a backslash must be followed by an escape character",
+    };
+  }
+  switch (next) {
+    case 0x6e /* n */:
+    case 0x72 /* r */:
+    case 0x74 /* t */:
+    case QUOTE:
+    case BACKSLASH:
+      return { length: 2 };
+    case 0x75 /* u */:
+    case 0x55 /* U */: {
+      const want = next === 0x75 ? 4 : 8;
+      let digits = 0;
+      while (digits < want && isHexDigit(text.charCodeAt(at + 2 + digits))) {
+        digits++;
+      }
+      const length = 2 + digits;
+      if (digits < want) {
+        const name = want === 4 ? "four" : "eight";
+        return {
+          length,
+          error: `invalid escape sequence: \\${String.fromCharCode(next)} must be followed by ${name} hexadecimal digits`,
+        };
+      }
+      const cp = parseInt(text.slice(at + 2, at + length), 16);
+      if ((cp >= 0xd800 && cp <= 0xdfff) || cp > 0x10ffff) {
+        const hex = cp.toString(16).toUpperCase().padStart(4, "0");
+        return {
+          length,
+          error: `invalid escape sequence: cannot encode U+${hex}, which is not a Unicode character`,
+        };
+      }
+      return { length };
+    }
+  }
+  const length = next > 0xffff ? 3 : 2;
+  const shown =
+    next < 0x20 || next === 0x7f
+      ? `'\\' followed by U+${next.toString(16).toUpperCase().padStart(4, "0")}`
+      : `'${text.slice(at, at + length)}'`;
+  return {
+    length,
+    error: `invalid escape sequence: ${shown} is not a valid escape (${VALID_ESCAPES})`,
+  };
 }
 
 /** Read one code point at `offset` and test ID_Start. */

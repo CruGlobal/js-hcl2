@@ -42,6 +42,19 @@ describe("attributes and primitives", () => {
       'bucket_prefix = "p"\na-b = 2\n',
     );
   });
+  it("treats a leading underscore as a valid identifier start", () => {
+    expect(isValidIdentifier("_")).toBe(true);
+    expect(isValidIdentifier("_foo")).toBe(true);
+    expect(isValidIdentifier("_46fe0a1b")).toBe(true);
+    expect(isValidIdentifier("1abc")).toBe(false);
+    expect(isValidIdentifier("-abc")).toBe(false);
+  });
+  it("emits underscore-led keys bare, so the output parses back", () => {
+    const value = { _a: 1, _blk: { l: { _b: "x" } } };
+    const text = stringify(value);
+    expect(text).toBe('_a = 1\n_blk "l" {\n  _b = "x"\n}\n');
+    expect(parse(text)).toEqual(value);
+  });
 });
 
 describe("strings — escapes and heredoc promotion", () => {
@@ -425,8 +438,8 @@ describe("isValidIdentifier", () => {
     expect(isValidIdentifier("1foo")).toBe(false);
     expect(isValidIdentifier("")).toBe(false);
   });
-  it("rejects identifiers starting with underscore (strict UAX #31)", () => {
-    expect(isValidIdentifier("_foo")).toBe(false);
+  it("accepts identifiers starting with underscore (HCL extends ID_Start with '_')", () => {
+    expect(isValidIdentifier("_foo")).toBe(true);
   });
   it("rejects keys containing spaces or punctuation", () => {
     expect(isValidIdentifier("has space")).toBe(false);

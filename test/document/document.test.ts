@@ -194,6 +194,22 @@ describe("Document.set — insertion of new attributes", () => {
     expect(out).toContain('env = "dev"');
   });
 
+  it("appends an attribute whose name starts with an underscore", () => {
+    expect(edited("a = 1\n", (d) => d.set(["_top"], 2))).toBe(
+      "a = 1\n_top = 2\n",
+    );
+    expect(edited("a = 1\n", (d) => d.set("_", true))).toBe(
+      "a = 1\n_ = true\n",
+    );
+  });
+
+  it("appends an underscore-led attribute inside a block body", () => {
+    const input = "locals {\n  a = 1\n}\n";
+    const out = edited(input, (d) => d.set(["locals", "_p"], "x"));
+    expect(out).toBe('locals {\n  a = 1\n  _p = "x"\n}\n');
+    expect(HCL.parse(out)).toEqual({ locals: { a: 1, _p: "x" } });
+  });
+
   it("appends with 2-space indent when the body has no existing attrs", () => {
     const input = "block {\n}\n";
     const out = edited(input, (d) => d.set(["block", "x"], 1));
