@@ -206,96 +206,41 @@ function parsePostfix(ctx: ExprCursor): ExprNode {
 
 function parseAfterDot(ctx: ExprCursor, source: ExprNode): ExprNode {
   const dotToken = ctx.consume(); // DOT
+  if (ctx.peek().kind === TokenKind.STAR) {
+    return parseAttrSplat(ctx, source, dotToken, ctx.consume());
+  }
+  return appendTraversalStep(source, parseNameAfterDot(ctx, dotToken));
+}
+
+/**
+ * The step after a `.`: an identifier, or a number for the legacy index
+ * form `a.0` (kept as a GetAttr whose name is the number; an evaluator
+ * reads it as an index). Anything else is Terraform's "invalid attribute
+ * name": the step gets an empty synthetic name, and the token is left
+ * for the caller, so it is never taken as a name (or, at the end of the
+ * file, put in the tree twice).
+ */
+function parseNameAfterDot(ctx: ExprCursor, dotToken: Token): GetAttrStep {
   const next = ctx.peek();
-
-  if (next.kind === TokenKind.STAR) {
-    // Attribute splat: source.*.a.b
-    const starToken = ctx.consume();
-    const each: TraversalStep[] = [];
-    const parts: Array<Token | ExprNode> = [source, dotToken, starToken];
-    while (true) {
-      const t = ctx.peek();
-      if (t.kind === TokenKind.DOT) {
-        const step = parseGetAttrStep(ctx);
-        each.push(step);
-        parts.push(step.dotToken, step.nameToken);
-        continue;
-      }
-      if (t.kind === TokenKind.LBRACK) {
-        const step = parseIndexStep(ctx);
-        each.push(step);
-        parts.push(step.lbrackToken, step.key, step.rbrackToken);
-        continue;
-      }
-      break;
-    }
-    const last = each.length > 0 ? each[each.length - 1]! : null;
-    const end = last
-      ? last.kind === "GetAttr"
-        ? last.nameToken.range.end
-        : last.rbrackToken.range.end
-      : starToken.range.end;
-    const node: SplatNode = {
-      kind: "Splat",
-      range: { start: source.range.start, end },
-      parts,
-      source,
-      style: "attr",
-      each,
-    };
-    return node;
-  }
-
-  if (next.kind === TokenKind.IDENT) {
-    // Regular get-attr.
-    return appendTraversalStep(source, parseGetAttrStepFromDot(ctx, dotToken));
-  }
-
-  if (next.kind === TokenKind.NUMBER) {
-    // Legacy integer traversal: a.0 — treated here as a synthetic GetAttr
-    // carrying the number token as the "name" for round-trip; semantic
-    // evaluation in M5+ will interpret it as an index.
+  if (next.kind === TokenKind.IDENT || next.kind === TokenKind.NUMBER) {
     const nameToken = ctx.consume();
-    const step: GetAttrStep = {
+    return {
       kind: "GetAttr",
       range: { start: dotToken.range.start, end: nameToken.range.end },
       dotToken,
       nameToken,
       name: nameToken.lexeme,
     };
-    return appendTraversalStep(source, step);
   }
-
-  ctx.errorAtToken(next, `expected identifier after '.', got ${next.kind}`);
-  // Recover: synthesize an empty GetAttr step.
+  ctx.errorAtToken(next, INVALID_ATTRIBUTE_NAME);
   const synth = syntheticToken(TokenKind.IDENT, dotToken.range.end);
-  const step: GetAttrStep = {
+  return {
     kind: "GetAttr",
     range: { start: dotToken.range.start, end: synth.range.end },
     dotToken,
     nameToken: synth,
     name: "",
   };
-  return appendTraversalStep(source, step);
-}
-
-function parseGetAttrStepFromDot(
-  ctx: ExprCursor,
-  dotToken: Token,
-): GetAttrStep {
-  const nameToken = ctx.consume(); // IDENT
-  return {
-    kind: "GetAttr",
-    range: { start: dotToken.range.start, end: nameToken.range.end },
-    dotToken,
-    nameToken,
-    name: nameToken.lexeme,
-  };
-}
-
-function parseGetAttrStep(ctx: ExprCursor): GetAttrStep {
-  const dotToken = ctx.consume(); // DOT
-  return parseGetAttrStepFromDot(ctx, dotToken);
 }
 
 function parseIndexStep(ctx: ExprCursor): IndexStep {
@@ -311,55 +256,98 @@ function parseIndexStep(ctx: ExprCursor): IndexStep {
   };
 }
 
+/** True when the next three tokens are `[ * ]`. */
+function atFullSplat(ctx: ExprCursor): boolean {
+  return (
+    ctx.peek().kind === TokenKind.LBRACK &&
+    ctx.peek(1).kind === TokenKind.STAR &&
+    ctx.peek(2).kind === TokenKind.RBRACK
+  );
+}
+
 function parseAfterLBrack(ctx: ExprCursor, source: ExprNode): ExprNode {
-  // Look ahead for full splat [*]
-  const first = ctx.peek(1);
-  const second = ctx.peek(2);
-  if (first.kind === TokenKind.STAR && second.kind === TokenKind.RBRACK) {
-    const lbrackToken = ctx.consume();
-    const starToken = ctx.consume();
-    const rbrackToken = ctx.consume();
-    const each: TraversalStep[] = [];
-    const parts: Array<Token | ExprNode> = [
-      source,
-      lbrackToken,
-      starToken,
-      rbrackToken,
-    ];
-    while (true) {
-      const t = ctx.peek();
-      if (t.kind === TokenKind.DOT) {
-        const step = parseGetAttrStep(ctx);
-        each.push(step);
-        parts.push(step.dotToken, step.nameToken);
-        continue;
-      }
-      if (t.kind === TokenKind.LBRACK) {
-        const step = parseIndexStep(ctx);
-        each.push(step);
-        parts.push(step.lbrackToken, step.key, step.rbrackToken);
-        continue;
-      }
-      break;
-    }
-    const last = each.length > 0 ? each[each.length - 1]! : null;
-    const end = last
-      ? last.kind === "GetAttr"
-        ? last.nameToken.range.end
-        : last.rbrackToken.range.end
-      : rbrackToken.range.end;
-    const node: SplatNode = {
-      kind: "Splat",
-      range: { start: source.range.start, end },
-      parts,
-      source,
-      style: "full",
-      each,
-    };
-    return node;
-  }
+  if (atFullSplat(ctx)) return parseFullSplat(ctx, source);
   // Regular index.
   return appendTraversalStep(source, parseIndexStep(ctx));
+}
+
+/**
+ * An attribute-only splat, `source.*.a.b`. As in the HCL spec
+ * (`attrSplat = "." "*" GetAttr*`) its steps are attribute names only:
+ * an index after it applies to the splat's result, so the steps stop at
+ * `[` and parsePostfix carries on from there. Another `.*` inside it is
+ * Terraform's "nested splat expression not allowed".
+ */
+function parseAttrSplat(
+  ctx: ExprCursor,
+  source: ExprNode,
+  dotToken: Token,
+  starToken: Token,
+): SplatNode {
+  const each: TraversalStep[] = [];
+  const parts: Array<Token | ExprNode> = [source, dotToken, starToken];
+  while (ctx.peek().kind === TokenKind.DOT) {
+    if (ctx.peek(1).kind === TokenKind.STAR) {
+      // Leave the `.*` for parsePostfix, which reads it as a new splat.
+      ctx.errorAtToken(ctx.peek(1), NESTED_SPLAT);
+      break;
+    }
+    const step = parseNameAfterDot(ctx, ctx.consume());
+    each.push(step);
+    parts.push(step.dotToken, step.nameToken);
+    if (step.name === "") break;
+  }
+  return makeSplat(source, parts, each, "attr", starToken);
+}
+
+/**
+ * A full splat, `source[*].a[0].b`: any attribute and index steps (HCL
+ * spec: `fullSplat = "[" "*" "]" (GetAttr | Index)*`). Another splat
+ * (`.*` or `[*]`) ends the steps, and parsePostfix wraps this splat in
+ * it, as the spec's `ExprTerm Splat` does.
+ */
+function parseFullSplat(ctx: ExprCursor, source: ExprNode): SplatNode {
+  const lbrackToken = ctx.consume();
+  const starToken = ctx.consume();
+  const rbrackToken = ctx.consume();
+  const each: TraversalStep[] = [];
+  const parts: Array<Token | ExprNode> = [source, lbrackToken, starToken, rbrackToken];
+  for (;;) {
+    const t = ctx.peek();
+    if (t.kind === TokenKind.DOT && ctx.peek(1).kind !== TokenKind.STAR) {
+      const step = parseNameAfterDot(ctx, ctx.consume());
+      each.push(step);
+      parts.push(step.dotToken, step.nameToken);
+      if (step.name === "") break;
+      continue;
+    }
+    if (t.kind === TokenKind.LBRACK && !atFullSplat(ctx)) {
+      const step = parseIndexStep(ctx);
+      each.push(step);
+      parts.push(step.lbrackToken, step.key, step.rbrackToken);
+      continue;
+    }
+    break;
+  }
+  return makeSplat(source, parts, each, "full", rbrackToken);
+}
+
+function makeSplat(
+  source: ExprNode,
+  parts: Array<Token | ExprNode>,
+  each: TraversalStep[],
+  style: SplatNode["style"],
+  marker: Token,
+): SplatNode {
+  const last = each.length > 0 ? each[each.length - 1]! : null;
+  return {
+    kind: "Splat",
+    range: { start: source.range.start, end: last ? last.range.end : marker.range.end },
+    parts,
+    source,
+    style,
+    each,
+  };
 }
 
 function appendTraversalStep(source: ExprNode, step: TraversalStep): TraversalNode {
@@ -1408,6 +1396,13 @@ function partEnd(
   // Every Token and node type exposes `range.end`.
   return part.range.end;
 }
+
+const INVALID_ATTRIBUTE_NAME =
+  "invalid attribute name: an attribute name is required after a dot";
+
+const NESTED_SPLAT =
+  "nested splat expression not allowed: a splat (*) cannot be used inside " +
+  "an attribute-only splat (.*)";
 
 // Avoid unused-import complaints if HCLParseError's side-effects are
 // needed in future expansions.
