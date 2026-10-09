@@ -153,6 +153,17 @@ describe("expression wrapping", () => {
     expect(e.source).toBe("f(1, 2)");
   });
 
+  it("wraps provider-defined function calls", () => {
+    const e = expectExpression(
+      (parseOK('x = provider::aws::arn_parse("a")\n') as { x: Value }).x,
+    );
+    expect(e.kind).toBe("function-call");
+    expect(e.source).toBe('provider::aws::arn_parse("a")');
+    expect(e.ast.kind === "Call" && e.ast.name).toBe(
+      "provider::aws::arn_parse",
+    );
+  });
+
   it("wraps binary operators", () => {
     const e = expectExpression(
       (parseOK("x = 1 + 2\n") as { x: Value }).x,

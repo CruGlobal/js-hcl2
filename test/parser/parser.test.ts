@@ -362,6 +362,51 @@ describe("raw newlines in quoted strings", () => {
   });
 });
 
+describe("provider-defined functions", () => {
+  it.each([
+    ["an attribute", 'a = provider::aws::arn_parse("x")\n'],
+    ["multi-line arguments", 'a = provider::aws::arn_parse(\n  "x",\n)\n'],
+    ["a line break after :: inside parentheses", "a = f(provider::\naws::g())\n"],
+    ["an interpolation", 'a = "${provider::aws::arn_parse(x).account_id}"\n'],
+    ["an if directive", 'a = "%{ if a::b() }x%{ endif }"\n'],
+    ["a conditional", "a = x ? provider::a::b(1) : 2\n"],
+    ["a conditional without spaces", "a = x ?y::z(1):2\n"],
+    ["an object for expression", "a = { for k, v in m : k => provider::d::m(v) }\n"],
+    ["a tuple for expression", "a = [for x in xs : provider::d::f(x)]\n"],
+    ["an expanded argument", "a = f(provider::a::b(1)...)\n"],
+    ["a one-line block", 'b "x" { c = d::e(1) }\n'],
+    ["unary and binary operators", "a = !p::q(1) && r::s(2)\n"],
+    ["an index and a splat", "a = provider::a::b(1)[0]\nb = provider::a::b(1)[*].c\n"],
+  ])("parses a provider function in %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it.each([
+    ["no name after ::", "a = provider::\n", /^missing function name/],
+    ["a line break after ::", "a = provider::\naws::g()\n", /^missing function name/],
+    [":::", "a = provider:::aws::f(1)\n", /^missing function name/],
+    ["no ( after the name", "a = provider::aws::arn_parse\n", /^missing open parenthesis/],
+    ["one :: and no (", "a = b::c\n", /^missing open parenthesis/],
+    ["( on the next line", "a = provider::a::b\n(1)\n", /^missing open parenthesis/],
+    ["a conditional with :: and no (", "a = x ? y ::z\n", /^missing open parenthesis/],
+  ])("reports %s as Terraform does", (_ctx, input, message) => {
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors[0]?.message).toMatch(message);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it.each([
+    ["an index", "a = x[0]::y()\n"],
+    ["a call", "a = provider::aws::arn_parse()::x()\n"],
+    ["an object", "a = { k = 1 } ::x\n"],
+    ["a string", 'a = "x" ::"y"\n'],
+  ])("rejects :: after %s", (_ctx, input) => {
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("identifiers that start with an underscore", () => {
   // bail: true, so a regression fails on the first error rather than
   // running `{ ... }` recovery on an INVALID token.

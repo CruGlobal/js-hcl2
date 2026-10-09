@@ -42,6 +42,7 @@ describe("per token kind", () => {
     { input: ".", kind: TokenKind.DOT },
     { input: "...", kind: TokenKind.ELLIPSIS },
     { input: ":", kind: TokenKind.COLON },
+    { input: "::", kind: TokenKind.DOUBLE_COLON },
     { input: "?", kind: TokenKind.QUESTION },
     { input: "=>", kind: TokenKind.FATARROW },
     // Operators
@@ -91,6 +92,29 @@ describe("per token kind", () => {
       [TokenKind.DOT, "."],
       [TokenKind.IDENT, "_46fe0a1b"],
       [TokenKind.EOF, ""],
+    ]);
+  });
+
+  it("lexes :: as one token and a third colon on its own", () => {
+    const sig = (input: string) =>
+      tokens(input).map((t) => [t.kind, t.lexeme]);
+    expect(sig("provider :: aws::f")).toEqual([
+      [TokenKind.IDENT, "provider"],
+      [TokenKind.DOUBLE_COLON, "::"],
+      [TokenKind.IDENT, "aws"],
+      [TokenKind.DOUBLE_COLON, "::"],
+      [TokenKind.IDENT, "f"],
+      [TokenKind.EOF, ""],
+    ]);
+    expect(sig(":::")).toEqual([
+      [TokenKind.DOUBLE_COLON, "::"],
+      [TokenKind.COLON, ":"],
+      [TokenKind.EOF, ""],
+    ]);
+    expect(sig(": :").map(([k]) => k)).toEqual([
+      TokenKind.COLON,
+      TokenKind.COLON,
+      TokenKind.EOF,
     ]);
   });
 
