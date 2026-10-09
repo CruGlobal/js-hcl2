@@ -245,6 +245,121 @@ describe("error recovery", () => {
   });
 });
 
+describe("each statement ends at a line break", () => {
+  // Every case and position here was checked against hashicorp/hcl v2.24.0
+  // (the version terraform 1.13 uses) and `terraform fmt`.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["two arguments", "a = 1 b = 2\n", 1, 7],
+    ["two arguments, no final newline", "a = 1 b = 2", 1, 7],
+    ["a stray '}' after an argument", "a = 1 }\n", 1, 7],
+    ["an argument that closes its block", "b {\n  a = 1 }\n", 2, 9],
+    ["two arguments in a block", "b {\n  a = 1 b = 2\n}\n", 2, 9],
+    ["a one-line comment between them", "a = 1 /* c */ b = 2\n", 1, 15],
+    ["a comment that hides the line break", "a = 1 /* multi\nline */ b = 2\n", 2, 9],
+  ])("rejects %s: missing newline after argument", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^missing newline after argument/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it.each([
+    ["an argument after a block", "b {} c = 1\n", 1, 6],
+    ["two blocks", "b {} c {}\n", 1, 6],
+    ["two one-line blocks", "b { a = 1 } c { d = 2 }\n", 1, 13],
+    ["an argument after a closing brace", "b {\n  a = 1\n} c = 1\n", 3, 3],
+    ["an argument after a nested block", "b {\n  c {} d = 1\n}\n", 2, 8],
+    ["a comment that hides the line break", "b {} /* x\ny */ c = 1\n", 2, 6],
+  ])("rejects %s: missing newline after block definition", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^missing newline after block definition/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it("rejects a comma between arguments", () => {
+    const errors = errorsOf("a = 1, b = 2\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^unexpected comma after argument/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([1, 6]);
+  });
+
+  it.each([
+    ["a second argument", "b { a = 1 b = 2 }\n", 1, 11, /^invalid single-argument block definition/],
+    ["a comma", "b { a = 1, b = 2 }\n", 1, 10, /^invalid single-argument block definition/],
+    ["a trailing comma", "b { a = 1 ,}\n", 1, 11, /^invalid single-argument block definition/],
+    ["a closing brace on the next line", "b { a = 1\n}\n", 1, 10, /^invalid single-argument block definition/],
+    ["a comment, then the brace on the next line", "b { a = 1 # c\n}\n", 1, 14, /^invalid single-argument block definition/],
+    ["a nested block", "b { c {} }\n", 1, 5, /^argument definition required/],
+    ["a nested block with a label", 'b { c "x" {} }\n', 1, 5, /^argument definition required/],
+  ])("rejects a one-line block with %s", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(message)]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it("throws on the first error when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1 b = 2\n"))).toThrow(
+      /missing newline after argument/,
+    );
+  });
+
+  it.each([
+    ["an argument with no final newline", "a = 1"],
+    ["a block with no final newline", "b {}"],
+    ["a line comment", "a = 1 # c\nb = 2\n"],
+    ["a // comment", "a = 1 // c\nb = 2\n"],
+    ["a comment before the line break", "a = 1 /* c */\nb = 2\n"],
+    ["a multi-line comment, then a line break", "a = 1 /* multi\nline */\nb = 2\n"],
+    ["a comment after a block", "b {} /* x\ny */\n"],
+    ["CRLF line breaks", "a = 1\r\nb = 2\r\n"],
+    ["a one-line block", "b { a = 1 }\n"],
+    ["a one-line block with no spaces", "b {a=1}\n"],
+    ["an empty one-line block", "b { }\n"],
+    ["a one-line block and a comment", "b { a = 1 } # c\n"],
+    ["a comment before a one-line argument", "b { /* c */ a = 1 }\n"],
+    ["a comment after a one-line argument", "b { a = 1 /* c */ }\n"],
+    ["a comment after the opening brace", "b { # c\n  a = 1\n}\n"],
+    ["a multi-line object in a one-line block", "b { a = { x = 1\n} }\n"],
+    ["a multi-line list in a one-line block", "b { a = [1,\n2] }\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps parsing on the next line and stays lossless", () => {
+    const input = "a = 1 b = 2\nc = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it("lets a '}' after an argument still close its block", () => {
+    const input = "b {\n  a = 1 }\nc = 2\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.blocks[0]!.body.attributes.map((a) => a.name)).toEqual(["a"]);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["c"]);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it("reads the rest of a one-line block that runs onto more lines", () => {
+    const input = "b { a = 1\n  c = 2\n}\nd = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.blocks[0]!.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["d"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("invalid escape sequences in quoted strings", () => {
   function errorsOf(input: string) {
     return parse(new SourceFile(input), { bail: false }).errors;
