@@ -48,6 +48,7 @@ import type {
   UnaryOpNode,
   VariableNode,
 } from "./nodes.js";
+import { isToken } from "./nodes.js";
 
 /**
  * Cursor + error-sink interface the expression parser needs. The outer
@@ -825,9 +826,10 @@ function parseTemplateBody(
       continue;
     }
     // Anything else inside a template body is a lexer bug or structural
-    // error — emit and try to make progress.
+    // error — emit and try to make progress. Keep the token so the CST
+    // stays lossless.
     ctx.errorAt(tok.range, `unexpected ${tok.kind} in template body`);
-    ctx.consume();
+    parts.push(ctx.consume());
   }
 
   const closeToken = expectOrSynth(ctx, endKind, `expected ${endKind}`);
@@ -969,10 +971,8 @@ function parseIfDirective(ctx: ExprCursor): TemplateIfDirectivePart {
     }
     // Otherwise: this is nested template content.
     const part = parseTemplateBodyPart(ctx);
-    if (part) {
-      doneParts.push(part);
-      ifParts.push(part);
-    }
+    if (!isToken(part)) doneParts.push(part);
+    ifParts.push(part);
   }
 
   const start = ifOpen.range.start;
@@ -1073,10 +1073,8 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
       }
     }
     const part = parseTemplateBodyPart(ctx);
-    if (part) {
-      bodyParts.push(part);
-      forParts.push(part);
-    }
+    if (!isToken(part)) bodyParts.push(part);
+    forParts.push(part);
   }
 
   const start = forOpen.range.start;
@@ -1119,7 +1117,12 @@ function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   };
 }
 
-function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | null {
+/**
+ * Parse one part of a directive body. A token that cannot start a part is
+ * reported and returned as-is, so the caller keeps it in the directive's
+ * `parts` (lossless CST) but not in its list of template parts.
+ */
+function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | Token {
   const tok = ctx.peek();
   if (tok.kind === TokenKind.QUOTED_LIT || tok.kind === TokenKind.INVALID) {
     return parseStringPart(ctx);
@@ -1132,8 +1135,7 @@ function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | null {
   }
   // Unknown token inside a template body — consume to make progress.
   ctx.errorAt(tok.range, `unexpected ${tok.kind} in template body`);
-  ctx.consume();
-  return null;
+  return ctx.consume();
 }
 
 function parseGenericPercentDirective(ctx: ExprCursor): TemplateInterpolationPart {
