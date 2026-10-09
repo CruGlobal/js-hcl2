@@ -73,6 +73,12 @@ const LBRACE = 0x7b;
  * for the whole of a for expression.
  */
 const FOR_BRACE = 0x1007b;
+/**
+ * Bracket-stack entry for the `[` of a `[*]` opened where line breaks
+ * count. Unlike other brackets it keeps them counting, so a line break
+ * inside the splat marker is an error, as in hclsyntax.
+ */
+const SPLAT_BRACKET = 0x1005b;
 const RBRACE = 0x7d;
 const TILDE = 0x7e;
 const LT = 0x3c;
@@ -288,6 +294,13 @@ export class Lexer {
       i = this.skipBlank(i);
     }
     return this.isWordAt(i, "in");
+  }
+
+  /** True when `[`, `*`, `]` (with only blanks between) start at `i`. */
+  private atSplatMarker(i: number): boolean {
+    const star = this.skipBlank(i + 1);
+    if (this.text.charCodeAt(star) !== STAR) return false;
+    return this.text.charCodeAt(this.skipBlank(star + 1)) === 0x5d /* ] */;
   }
 
   /** Skip spaces, tabs, line breaks (LF, CRLF) and comments from `i`. */
@@ -513,10 +526,12 @@ export class Lexer {
         this.pos++;
         this.popBracket();
         return { kind: TokenKind.RPAREN };
-      case 0x5b /* [ */:
+      case 0x5b /* [ */: {
+        const splat = !this.shouldSuppressNewlines() && this.atSplatMarker(this.pos);
         this.pos++;
-        this.brackets.push(c);
+        this.brackets.push(splat ? SPLAT_BRACKET : c);
         return { kind: TokenKind.LBRACK };
+      }
       case 0x5d /* ] */:
         this.pos++;
         this.popBracket();

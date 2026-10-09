@@ -250,6 +250,30 @@ function parseNameAfterDot(ctx: ExprCursor, dotToken: Token): GetAttrStep {
 
 function parseIndexStep(ctx: ExprCursor): IndexStep {
   const lbrackToken = ctx.consume(); // LBRACK
+  if (ctx.peek().kind === TokenKind.STAR) {
+    // `[*` not followed right away by `]` (a line break between them, for
+    // one): Terraform's "missing close bracket on splat index". The star
+    // is kept in an ErrorExpr key so the CST stays lossless.
+    const star = ctx.consume();
+    ctx.errorAtToken(ctx.peek(), SPLAT_NOT_CLOSED);
+    const key: ErrorExprNode = {
+      kind: "ErrorExpr",
+      range: star.range,
+      parts: [star],
+      message: SPLAT_NOT_CLOSED,
+    };
+    const rbrackToken =
+      ctx.peek().kind === TokenKind.RBRACK
+        ? ctx.consume()
+        : syntheticToken(TokenKind.RBRACK, star.range.end);
+    return {
+      kind: "Index",
+      range: { start: lbrackToken.range.start, end: rbrackToken.range.end },
+      lbrackToken,
+      key,
+      rbrackToken,
+    };
+  }
   const key = parseExpression(ctx);
   const rbrackToken = expectOrSynth(ctx, TokenKind.RBRACK, "expected ']'");
   return {
@@ -1423,6 +1447,10 @@ function partEnd(
 
 const INVALID_ATTRIBUTE_NAME =
   "invalid attribute name: an attribute name is required after a dot";
+
+const SPLAT_NOT_CLOSED =
+  "missing close bracket on splat index: the * of a full splat must be " +
+  "followed right away by ]";
 
 const NESTED_SPLAT =
   "nested splat expression not allowed: a splat (*) cannot be used inside " +
