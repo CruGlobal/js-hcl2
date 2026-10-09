@@ -190,6 +190,203 @@ describe("block grouping", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Lists of objects. One block parses as an object, and repeated blocks
+// parse as a list, so only a list of two or more can be blocks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("lists of objects", () => {
+  it("writes a one-item list of objects as a tuple", () => {
+    const v = { xs: [{ a: 1 }] };
+    const out = stringify(v);
+    expect(out).toBe("xs = [{ a = 1 }]\n");
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("keeps a one-item list in a labeled block's body", () => {
+    const text =
+      'variable "services" {\n' +
+      '  default = [{ name = "app" }]\n' +
+      "  type = list(object({ name = string }))\n" +
+      "}\n";
+    expect(stringify(parse(text))).toBe(text);
+  });
+
+  it("does not peel the label above a one-item list", () => {
+    const v = { a: { b: [{ x: 1 }] } };
+    const out = stringify(v);
+    expect(out).toBe("a {\n  b = [{ x = 1 }]\n}\n");
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("still writes two or more objects under a label as repeated blocks", () => {
+    const v = { a: { b: [{ x: 1 }, { x: 2 }] } };
+    const out = stringify(v);
+    expect(out).toBe('a "b" {\n  x = 1\n}\na "b" {\n  x = 2\n}\n');
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("does not peel a repeated block's keys into labels", () => {
+    const text =
+      'resource "google_storage_bucket" "logs" {\n' +
+      '  name = "logs"\n' +
+      "  lifecycle_rule {\n" +
+      "    action {\n" +
+      '      type = "Delete"\n' +
+      "    }\n" +
+      "    condition {\n" +
+      "      age = 30\n" +
+      "    }\n" +
+      "  }\n" +
+      "  lifecycle_rule {\n" +
+      "    action {\n" +
+      '      type = "SetStorageClass"\n' +
+      "    }\n" +
+      "    condition {\n" +
+      "      age = 7\n" +
+      "    }\n" +
+      "  }\n" +
+      "}\n";
+    expect(stringify(parse(text))).toBe(text);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Objects whose keys need quotes. A block body can only hold bare names,
+// so these must be written as object-literal attributes.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("objects with keys that need quotes", () => {
+  /** stringify, then check the text parses back to the same value. */
+  function roundTrip(v: Record<string, Value>): string {
+    const out = stringify(v);
+    expect(parse(out)).toEqual(v);
+    return out;
+  }
+
+  it("writes an object with a quoted key as an attribute, not a block", () => {
+    const out = roundTrip({
+      attribute_mapping: { "google.subject": "assertion.sub" },
+    });
+    expect(out).toBe(
+      'attribute_mapping = { "google.subject" = "assertion.sub" }\n',
+    );
+  });
+
+  it("keeps the attribute inside a labeled block's body", () => {
+    const out = roundTrip({
+      resource: {
+        aws_subnet: {
+          private: {
+            for_each: { "1a": "10.0.1.0/24", "1b": "10.0.2.0/24" },
+            vpc_id: "vpc-1",
+          },
+        },
+      },
+    });
+    expect(out).toBe(
+      'resource "aws_subnet" "private" {\n' +
+        '  for_each = { "1a" = "10.0.1.0/24", "1b" = "10.0.2.0/24" }\n' +
+        '  vpc_id = "vpc-1"\n' +
+        "}\n",
+    );
+  });
+
+  it("writes mixed quoted and bare keys as one object literal", () => {
+    const out = roundTrip({
+      tags: { Name: "web", "kubernetes.io/role/elb": "1" },
+    });
+    expect(out).toBe(
+      'tags = { Name = "web", "kubernetes.io/role/elb" = "1" }\n',
+    );
+  });
+
+  it("writes an object holding lists under quoted keys as an attribute", () => {
+    const out = roundTrip({
+      bindings: { "roles/viewer": ["group:a@example.org"], "roles/editor": [] },
+    });
+    expect(out).toBe(
+      'bindings = { "roles/viewer" = ["group:a@example.org"], "roles/editor" = [] }\n',
+    );
+  });
+
+  it.each([
+    "a.b",
+    "roles/viewer",
+    "has space",
+    "1a",
+    "",
+    "😀",
+    "${x}",
+    "%{y}",
+    'q"uote',
+    "back\\slash",
+    "tab\tkey",
+    "line\nbreak",
+  ])("round-trips the key %j next to a bare key", (key) => {
+    roundTrip({ m: { [key]: 1, plain: 2 } });
+    roundTrip({ m: { plain: { [key]: [1, "x"] } } });
+  });
+
+  it("quotes for and null as object-literal keys", () => {
+    // `{ for = 1 }` starts a for expression and `{ null = 1 }` has a
+    // null key, so neither reads back as a name.
+    const out = roundTrip({
+      m: { "a.b": 1, for: 2, null: 3, in: 4, if: 5, true: 6 },
+    });
+    expect(out).toBe(
+      'm = { "a.b" = 1, "for" = 2, "null" = 3, in = 4, if = 5, true = 6 }\n',
+    );
+  });
+
+  it("quotes for and null keys in an object inside a tuple", () => {
+    const out = roundTrip({ xs: [{ for: 1 }, { null: 2 }, 3] });
+    expect(out).toBe('xs = [{ "for" = 1 }, { "null" = 2 }, 3]\n');
+  });
+
+  it("keeps for and null bare as names in a block body", () => {
+    const out = roundTrip({ locals: { for: 1, null: 2 } });
+    expect(out).toBe("locals {\n  for = 1\n  null = 2\n}\n");
+  });
+
+  it("writes a list of objects with quoted keys as a tuple", () => {
+    const out = roundTrip({ rules: [{ "a.b": 1 }, { "c/d": 2 }] });
+    expect(out).toBe('rules = [{ "a.b" = 1 }, { "c/d" = 2 }]\n');
+  });
+
+  it("does not peel a label whose block body would need a quoted name", () => {
+    const out = roundTrip({ a: { b: { "x.y": 1 } } });
+    expect(out).toBe('a {\n  b = { "x.y" = 1 }\n}\n');
+  });
+
+  it("still peels quoted keys into labels when every value is a block body", () => {
+    const out = roundTrip({ path: { "secret/*": { capabilities: ["read"] } } });
+    expect(out).toBe('path "secret/*" {\n  capabilities = ["read"]\n}\n');
+  });
+
+  it("peels an empty key into an empty label", () => {
+    const text = 'a "" {\n  x = var.y\n}\n';
+    expect(stringify(parse(text))).toBe(text);
+  });
+
+  it("round-trips a parsed block that holds a quoted-key object and expressions", () => {
+    const text =
+      'resource "google_iam_workload_identity_pool_provider" "github" {\n' +
+      "  attribute_mapping = {\n" +
+      '    "google.subject" = "assertion.sub"\n' +
+      '    "attribute.repository" = "assertion.repository"\n' +
+      "  }\n" +
+      "  pool_id = google_iam_workload_identity_pool.github.id\n" +
+      "}\n";
+    const parsed = parse(text);
+    const out = stringify(parsed);
+    expect(out).toBe(text);
+    expect(normalizeForComparison(parse(out))).toEqual(
+      normalizeForComparison(parsed),
+    );
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Options
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -313,7 +510,7 @@ describe("golden (input → canonical output)", () => {
     [
       "inline object literal inside tuple",
       { xs: [{ a: 1 }] as unknown as Value },
-      "xs {\n  a = 1\n}\n",
+      "xs = [{ a = 1 }]\n",
     ],
     [
       "empty block",

@@ -10,10 +10,11 @@
  *      twice yields identical text — which shakes out deterministic
  *      output across reorderings the printer doesn't preserve.
  *
- * The generators deliberately avoid inputs whose structure the Value
- * layer collapses ambiguously (e.g. tuple-of-plain-objects, which the
- * printer emits as repeated blocks). The milestone bar is ≥1000
- * generated inputs across the property tests.
+ * The Value generators deliberately avoid inputs whose structure the
+ * Value layer collapses ambiguously (e.g. tuple-of-plain-objects, which
+ * the printer emits as repeated blocks). A separate property generates
+ * HCL text instead, so it covers those shapes as `parse` returns them.
+ * The milestone bar is ≥1000 generated inputs across the property tests.
  */
 
 import fc from "fast-check";
@@ -188,6 +189,111 @@ const escapedLabel = fc
     { minLength: 1, maxLength: 8 },
   )
   .map((parts) => parts.join(""));
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Generated HCL text. The Value generators above avoid shapes the Value
+// layer can't tell apart (one-item lists of objects, objects that could
+// be blocks or attributes). Generating text instead covers exactly the
+// Values `parse` can return, so every one of them must round-trip.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Object keys and labels: identifiers mixed with keys that need quotes. */
+const anyKey = fc.oneof(
+  identKey,
+  fc.constantFrom(
+    "a.b", "roles/viewer", "1a", "has space", "", "for", "null", "in",
+    "if", "true", "é", "😀", "${x}", "%{y}", 'q"uote', "back\\slash",
+    "a-b", "_u",
+  ),
+);
+
+/** `s` as an HCL quoted string, with `${` and `%{` escaped. */
+function hclString(s: string): string {
+  return JSON.stringify(s).replace(/\$\{/g, "$$$${").replace(/%\{/g, "%%{");
+}
+
+const literalText = fc.letrec((tie) => ({
+  value: fc.oneof(
+    { depthSize: "small" },
+    fc.constantFrom("true", "false", "null"),
+    fc.nat(1000).map(String),
+    safeString.map(hclString),
+    tie("tuple"),
+    tie("object"),
+  ),
+  tuple: fc
+    .array(tie("value") as fc.Arbitrary<string>, { maxLength: 3 })
+    .map((items) => `[${items.join(", ")}]`),
+  object: fc
+    .uniqueArray(fc.tuple(anyKey, tie("value") as fc.Arbitrary<string>), {
+      maxLength: 4,
+      selector: ([k]) => k,
+    })
+    .map(
+      (items) =>
+        `{ ${items.map(([k, v]) => `${hclString(k)} = ${v}`).join(", ")} }`,
+    ),
+})).value as fc.Arbitrary<string>;
+
+const expressionText = fc.constantFrom(
+  "var.x",
+  '"${var.y}-z"',
+  "local.z[0]",
+  "f(1)",
+  "[for v in var.l : v]",
+);
+
+/**
+ * A body of attributes and blocks. Attribute names start with `a_` and
+ * block types with `b`, so the two never share a key. The digit in a
+ * block type is its label count, so blocks of one type never nest under
+ * each other's labels. Repeated types and labels make lists of blocks.
+ */
+const bodyText = fc.letrec((tie) => ({
+  body: fc
+    .record({
+      attrs: fc.uniqueArray(
+        fc.tuple(identKey, fc.oneof(literalText, literalText, expressionText)),
+        { maxLength: 4, selector: ([k]) => k },
+      ),
+      blocks: fc.array(tie("block") as fc.Arbitrary<string>, {
+        maxLength: 3,
+      }),
+    })
+    .map(({ attrs, blocks }) =>
+      [...attrs.map(([k, v]) => `a_${k} = ${v}`), ...blocks].join("\n"),
+    ),
+  block: fc
+    .tuple(
+      fc.integer({ min: 0, max: 2 }),
+      fc.constantFrom("x", "y"),
+      fc.array(anyKey, { minLength: 2, maxLength: 2 }),
+      fc.oneof(
+        { depthSize: "small" },
+        fc.constant(""),
+        tie("body") as fc.Arbitrary<string>,
+      ),
+    )
+    .map(([n, t, labels, body]) => {
+      const header = labels.slice(0, n).map((l) => ` ${hclString(l)}`);
+      return `b${n}${t}${header.join("")} {\n${body}\n}`;
+    }),
+})).body;
+
+describe("property: any parsed body round-trips through stringify", () => {
+  it(`holds over ${RUNS_MAIN} generated HCL files`, () => {
+    fc.assert(
+      fc.property(bodyText, (text) => {
+        const parsed = parse(`${text}\n`);
+        const once = stringify(parsed);
+        const reparsed = parse(once);
+        expect(normalize(reparsed)).toEqual(normalize(parsed));
+        expect(stringify(reparsed)).toBe(once);
+      }),
+      { numRuns: RUNS_MAIN },
+    );
+  });
+});
 
 describe("property: block labels that need escapes round-trip", () => {
   it(`holds over ${RUNS_SMALL} generated label pairs`, () => {

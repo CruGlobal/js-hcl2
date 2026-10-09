@@ -7,17 +7,28 @@
  * round-trip — that's the Document API (M7). This printer normalizes
  * whitespace, ordering, and choice of block vs attribute.
  *
- * Block vs attribute policy (body level):
- *   - Expression, primitive, array of non-objects, or empty array  → attribute
- *   - Plain object                                                 → block
- *   - Non-empty array of plain objects                             → repeated blocks
+ * Block vs attribute policy (body level). A Value does not record
+ * whether an object came from a block or an attribute, so the printer
+ * prefers blocks and falls back to an attribute whenever blocks would
+ * not parse back to the same Value:
+ *   - Expression, primitive, or any array that is not a block list → attribute
+ *   - Plain object that can be written as blocks                    → block(s)
+ *   - Block list (2+ plain objects whose keys are all identifiers)   → repeated blocks
+ *   - Any other plain object                                        → attribute
  *
- * Label peeling for blocks: if a block body is itself a "label layer"
- * (every key is a valid HCL identifier and every value is a plain
- * object or an array of plain objects), each key becomes an additional
- * block label and the printer recurses into its value. This reproduces
- * Terraform's `resource "type" "name" {}` shape from the corresponding
- * nested Value.
+ * A plain object can be written as blocks when every one of its values
+ * can itself be written as blocks (its keys then become block labels),
+ * or when every key is a valid identifier, so each key can be an
+ * attribute or block name inside the block body. An object with a key
+ * that needs quotes (`"roles/viewer"`) and a value that is not a block
+ * becomes an object-literal attribute instead.
+ *
+ * Label peeling: when every value of an object can be written as
+ * blocks, each key becomes one more block label and the printer
+ * recurses into its value. This reproduces Terraform's
+ * `resource "type" "name" {}` shape from the corresponding nested Value.
+ * A one-item list of objects is written as a tuple, because one block
+ * parses back as an object, so write a single block as an object.
  */
 
 import { isIdContinue, isIdStart } from "../unicode.js";
@@ -128,66 +139,47 @@ function printBodyEntry(
   opts: ResolvedStringifyOptions,
   out: string[],
 ): void {
-  if (isExpression(value)) {
-    emitAttribute(key, value, depth, opts, out);
-    return;
-  }
   // Block emission requires an identifier key at the body level
   // (block TYPES cannot be quoted). Non-identifier keys fall through
   // to attribute emission, even if the value would otherwise be
   // emitted as a block.
-  if (isValidIdentifier(key)) {
-    if (
-      Array.isArray(value) &&
-      value.length > 0 &&
-      value.every(isPlainObject)
-    ) {
-      for (const item of value) {
-        emitAsBlocks(key, [], item, depth, opts, out);
-      }
-      return;
-    }
-    if (isPlainObject(value)) {
-      emitAsBlocks(key, [], value, depth, opts, out);
-      return;
-    }
+  if (isValidIdentifier(key) && canEmitAsBlocks(value)) {
+    emitAsBlocks(key, [], value, depth, opts, out);
+    return;
   }
   emitAttribute(key, value, depth, opts, out);
 }
 
-/** Drives block emission, including label peeling. */
+/**
+ * Drives block emission, including label peeling. `value` must pass
+ * canEmitAsBlocks: a block list, a label layer, or a plain object
+ * whose keys are all identifiers.
+ */
 function emitAsBlocks(
   type: string,
   labels: readonly string[],
-  body: Record<string, Value>,
+  value: Value,
   depth: number,
   opts: ResolvedStringifyOptions,
   out: string[],
 ): void {
+  if (Array.isArray(value)) {
+    // Each item is one block with exactly these labels. Peeling an
+    // item's keys into more labels would group the blocks under those
+    // keys instead of collecting them into this list.
+    for (const item of value) {
+      const body = item as Record<string, Value>;
+      emitBlockShell(type, labels, body, depth, opts, out);
+    }
+    return;
+  }
+  const body = value as Record<string, Value>;
   if (isLabelLayer(body)) {
     const keys = opts.sortKeys
       ? [...Object.keys(body)].sort()
       : Object.keys(body);
     for (const label of keys) {
-      const inner = body[label]!;
-      if (
-        Array.isArray(inner) &&
-        inner.length > 0 &&
-        inner.every(isPlainObject)
-      ) {
-        for (const item of inner) {
-          emitAsBlocks(type, [...labels, label], item, depth, opts, out);
-        }
-      } else if (isPlainObject(inner)) {
-        emitAsBlocks(type, [...labels, label], inner, depth, opts, out);
-      } else {
-        // Shouldn't happen because isLabelLayer enforces plain-object
-        // (or array-of-plain-object) children, but be defensive: fall
-        // back to emitting this entry as a nested attribute within a
-        // body that also carries the peeled block's body.
-        emitBlockShell(type, labels, body, depth, opts, out);
-        return;
-      }
+      emitAsBlocks(type, [...labels, label], body[label]!, depth, opts, out);
     }
     return;
   }
@@ -293,7 +285,7 @@ function printObjectLiteral(
     const raw = obj[k]!;
     const value = applyReplacer(k, raw, opts.replacer);
     if (value === undefined) continue;
-    const keyText = formatIdentOrQuoted(k);
+    const keyText = formatObjectKey(k);
     const valText = printValueExpression(value, depth, opts);
     entries.push(`${keyText} = ${valText}`);
   }
@@ -429,6 +421,21 @@ function formatIdentOrQuoted(key: string): string {
   return isValidIdentifier(key) ? key : quotedString(key);
 }
 
+/**
+ * Keys that are identifiers but do not read back as a name in an
+ * object literal: `{ for = 1 }` starts a for expression, and
+ * `{ null = 1 }` has a null key. `true` and `false` read back as the
+ * strings "true" and "false", so they stay bare.
+ */
+const OBJECT_KEY_KEYWORDS: ReadonlySet<string> = new Set(["for", "null"]);
+
+/** Format a key inside an object literal (`{ key = value }`). */
+function formatObjectKey(key: string): string {
+  return isValidIdentifier(key) && !OBJECT_KEY_KEYWORDS.has(key)
+    ? key
+    : quotedString(key);
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
@@ -452,18 +459,48 @@ function isPlainObject(v: unknown): v is Record<string, Value> {
   return proto === null || proto === Object.prototype;
 }
 
+/**
+ * True when `value` can be written as one or more blocks that parse
+ * back to it: a block list, a label layer, or a plain object whose
+ * keys are all identifiers (each key is then an attribute or a nested
+ * block inside the block body, chosen on its own).
+ */
+function canEmitAsBlocks(value: Value): boolean {
+  if (isBlockList(value)) return true;
+  if (!isPlainObject(value)) return false;
+  return hasIdentifierKeys(value) || isLabelLayer(value);
+}
+
+/**
+ * A list of blocks that share a type and labels: two or more plain
+ * objects, each usable as a block body. One block parses as a plain
+ * object, never as a one-item list, so a one-item list stays a tuple.
+ */
+function isBlockList(
+  value: Value,
+): value is ReadonlyArray<Record<string, Value>> {
+  return (
+    Array.isArray(value) &&
+    value.length > 1 &&
+    value.every((item) => isPlainObject(item) && hasIdentifierKeys(item))
+  );
+}
+
+/**
+ * A "label layer": a non-empty object whose every value can itself be
+ * written as blocks, so each key can become one more block label.
+ * Labels are quoted strings, so any key works, including "" and keys
+ * that are not identifiers.
+ */
 function isLabelLayer(obj: Record<string, Value>): boolean {
-  const entries = Object.entries(obj);
-  if (entries.length === 0) return false;
-  for (const [k, v] of entries) {
-    // Empty keys would emit as '""' which HCL parsers accept as a label
-    // but is pathological; bail out.
-    if (k.length === 0) return false;
-    if (isPlainObject(v)) continue;
-    if (Array.isArray(v) && v.length > 0 && v.every(isPlainObject)) continue;
-    return false;
-  }
-  return true;
+  const values = Object.values(obj);
+  if (values.length === 0) return false;
+  return values.every(canEmitAsBlocks);
+}
+
+/** True when every key of `obj` can be a bare attribute or block name. */
+function hasIdentifierKeys(obj: Record<string, Value>): boolean {
+  return Object.keys(obj).every(isValidIdentifier);
 }
 
 function indent(depth: number, opts: ResolvedStringifyOptions): string {
