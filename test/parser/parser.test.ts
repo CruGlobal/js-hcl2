@@ -360,6 +360,64 @@ describe("each statement ends at a line break", () => {
   });
 });
 
+describe("an argument set twice in one body", () => {
+  // hashicorp/hcl reports "Attribute redefined" while parsing a body
+  // (hclsyntax ParseBody), so `terraform fmt` rejects it too.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it("reports the second one and says where the first one is", () => {
+    const errors = errorsOf("a = 1\na = 2\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      'attribute redefined: the argument "a" was already set at line 1, ' +
+        "column 1; each argument may be set only once",
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([2, 1]);
+  });
+
+  it("reports it inside a block", () => {
+    const errors = errorsOf("b {\n  a = 1\n  a = 2\n}\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^attribute redefined: the argument "a" was already set at line 2, column 3;/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([3, 3]);
+  });
+
+  it("reports every repeat against the first one", () => {
+    const errors = errorsOf("a = 1\na = 2\na = 3\n");
+    expect(errors.map((e) => [e.line, e.message.match(/line \d+/)![0]])).toEqual([
+      [2, "line 1"],
+      [3, "line 1"],
+    ]);
+  });
+
+  it("reports it after the line's own error", () => {
+    const errors = errorsOf("a = 1 b = 2\na = 3\n");
+    expect(errors.map((e) => e.message.split(":")[0])).toEqual([
+      "missing newline after argument",
+      "attribute redefined",
+    ]);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\na = 2\n"))).toThrow(
+      /^attribute redefined/,
+    );
+  });
+
+  it.each([
+    ["the same name in different bodies", "a = 1\nb {\n  a = 2\n}\n"],
+    ["two blocks of one type", "b {}\nb {}\n"],
+    ["two one-line blocks with the same argument", "b { a = 1 }\nb { a = 2 }\n"],
+    ["an argument and a block with one name", "a = 1\na {}\n"],
+    ["a repeated object key", "a = { x = 1, x = 2 }\n"],
+    ["names that differ only in case", "A = 1\na = 2\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
 describe("invalid escape sequences in quoted strings", () => {
   function errorsOf(input: string) {
     return parse(new SourceFile(input), { bail: false }).errors;
