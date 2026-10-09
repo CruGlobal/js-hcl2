@@ -783,6 +783,43 @@ describe("suppressed newlines inside interpolations", () => {
     expect(kinds).not.toContain(TokenKind.NEWLINE);
     expectRejoin('"${\n  foo\n}"');
   });
+
+  // Inside `${ }` and `%{ }` newlines are whitespace, but inside an
+  // object `{ }` nested in one they separate items again, as in
+  // hashicorp/hcl. Brackets opened inside a sequence belong to it.
+  function newlineOffsets(input: string): number[] {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.NEWLINE)
+      .map((t) => t.range.start.offset);
+  }
+
+  it.each([
+    ["an object in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
+    ["an object in %{ }", 'a = "%{ if {a = 1\nb = 2}.a }x%{ endif }"\n'],
+    ["an object in a call in ${ }", 'a = "${ f({a = 1\nb = 2}) }"\n'],
+    ["an object in a for in ${ }", 'a = "${ [for k, v in {a = 1\nb = 2} : k] }"\n'],
+    ["an object in a heredoc's ${ }", "a = <<EOT\n${ {a = 1\nb = 2}.a }\nEOT\n"],
+  ])("emits a NEWLINE between the items of %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.indexOf("1\nb") + 1, input.length - 1]);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["inside ${ } in an object", 'a = { k = "${\nx\n}" }\n'],
+    ["inside a list in ${ }", 'a = "${ [\n1,\n2] }"\n'],
+  ])("keeps newlines as whitespace %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+  });
+
+  it("does not let a '(' left open in ${ } hide the newline after the string", () => {
+    const input = 'a = { k = "${ (x }"\nj = 2 }\n';
+    expect(newlineOffsets(input)).toEqual([input.indexOf("\nj"), input.length - 1]);
+  });
+
+  it("does not let an extra ')' in ${ } close a '[' outside it", () => {
+    const input = 'a = ["${ x) }",\n2]\n';
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+  });
 });
 
 describe("supplementary-plane identifiers", () => {

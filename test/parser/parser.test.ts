@@ -421,6 +421,35 @@ describe("a lone CR", () => {
   });
 });
 
+describe("objects over several lines inside ${ } and %{ }", () => {
+  it.each([
+    ["in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
+    ["with a blank line", 'a = "${ {a = 1\n\nb = 2\n}.a }"\n'],
+    ["in %{ if }", 'a = "%{ if {a = 1\nb = 2}.a }x%{ endif }"\n'],
+    ["in a call", 'a = "${ f({a = 1\nb = 2}) }"\n'],
+    ["in a list", 'a = "${ [\n{a = 1\nb = 2}\n] }"\n'],
+    ["in a for expression", 'a = "${ [for k, v in {a = 1\nb = 2} : k] }"\n'],
+    ["in a heredoc", "a = <<EOT\n${ {a = 1\nb = 2}.a }\nEOT\n"],
+    ["as an object for", 'a = "${ {for k, v in m :\nk => v} }"\n'],
+  ])("accepts one %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("still needs a separator between items on one line", () => {
+    const errors = parse(new SourceFile('a = "${ {a = 1 b = 2}.a }"\n'), {
+      bail: false,
+    }).errors;
+    expect(errors[0]!.message).toMatch(/^expected ',' or newline between object items/);
+  });
+
+  it("reports only the unclosed '(' in ${ } inside an object", () => {
+    const input = 'a = { k = "${ (x }"\nj = 2 }\n';
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors.map((e) => e.message)).toEqual(["expected ')'"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("strip markers out of place", () => {
   // hashicorp/hcl reports "Unsupported operator" for a `~` that does not
   // touch the `${`, `%{` or closing `}`.
