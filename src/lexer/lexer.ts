@@ -48,6 +48,11 @@ interface ModeFrame {
    * `${` or `%{`, where a `~` strip marker may sit.
    */
   bodyStart?: number;
+  /**
+   * TEMPLATE_INTERP / TEMPLATE_CONTROL only: how many brackets were open
+   * when the sequence began. Brackets above this belong to the sequence.
+   */
+  bracketBase?: number;
 }
 
 const SPACE = 0x20;
@@ -78,10 +83,10 @@ export class Lexer {
   private pos = 0;
   private readonly modes: ModeFrame[] = [{ kind: "NORMAL", braceDepth: 0 }];
   /**
-   * Stack of open parenthesis / bracket kinds, for newline suppression.
-   * Braces are not pushed here — they are handled by the mode stack
-   * (TEMPLATE_INTERP / TEMPLATE_CONTROL) because their meaning depends on
-   * context the lexer cannot determine on its own.
+   * Stack of open `(`, `[` and `{`, for newline suppression. A template
+   * sequence (`${ }` / `%{ }`) owns the brackets opened inside it: an
+   * extra closer there cannot pop one opened outside, and the ones left
+   * open are dropped when the sequence ends.
    */
   private readonly brackets: number[] = [];
 
@@ -106,20 +111,24 @@ export class Lexer {
 
   private shouldSuppressNewlines(): boolean {
     const top = this.currentMode();
-    if (top.kind === "TEMPLATE_INTERP" || top.kind === "TEMPLATE_CONTROL") {
-      return true;
-    }
-    // Inside ( or [, newlines are insignificant. Braces are also pushed
-    // onto the bracket stack so we can tell when we've re-entered a
-    // newline-significant context (like an object literal inside a
-    // function-call argument) — but `{` is emitted as "preserve
-    // newlines" so that nested object items still get their separators.
-    if (top.kind === "NORMAL" && this.brackets.length > 0) {
+    // The innermost bracket opened in the current context decides: inside
+    // ( or [ newlines are insignificant, inside { they separate object
+    // items (as in an object literal in a call argument, or in `${ }`).
+    if (this.brackets.length > (top.bracketBase ?? 0)) {
       const topBracket = this.brackets[this.brackets.length - 1]!;
       // 0x28 '(' and 0x5b '[' suppress; 0x7b '{' does not.
       return topBracket === 0x28 || topBracket === 0x5b;
     }
-    return false;
+    // With no bracket of its own open, `${ }` and `%{ }` treat newlines as
+    // whitespace; the top level keeps them as statement ends.
+    return top.kind === "TEMPLATE_INTERP" || top.kind === "TEMPLATE_CONTROL";
+  }
+
+  /** Close the innermost bracket, but never one opened outside the current sequence. */
+  private popBracket(): void {
+    if (this.brackets.length > (this.currentMode().bracketBase ?? 0)) {
+      this.brackets.pop();
+    }
   }
 
   private nextToken(): Token {
@@ -357,11 +366,8 @@ export class Lexer {
       }
       // Pop the matching LBRACE off the bracket stack (pushed for
       // newline-significance tracking above).
-      if (
-        this.brackets.length > 0 &&
-        this.brackets[this.brackets.length - 1] === LBRACE
-      ) {
-        this.brackets.pop();
+      if (this.brackets[this.brackets.length - 1] === LBRACE) {
+        this.popBracket();
       }
       this.pos++;
       return { kind: TokenKind.RBRACE };
@@ -430,7 +436,7 @@ export class Lexer {
         return { kind: TokenKind.LPAREN };
       case 0x29 /* ) */:
         this.pos++;
-        this.brackets.pop();
+        this.popBracket();
         return { kind: TokenKind.RPAREN };
       case 0x5b /* [ */:
         this.pos++;
@@ -438,7 +444,7 @@ export class Lexer {
         return { kind: TokenKind.LBRACK };
       case 0x5d /* ] */:
         this.pos++;
-        this.brackets.pop();
+        this.popBracket();
         return { kind: TokenKind.RBRACK };
       case 0x2c /* , */:
         this.pos++;
@@ -633,7 +639,12 @@ export class Lexer {
     // Interpolation opener: ${ or %{
     if (c === DOLLAR && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_INTERP", braceDepth: 0, bodyStart: this.pos });
+      this.pushMode({
+        kind: "TEMPLATE_INTERP",
+        braceDepth: 0,
+        bodyStart: this.pos,
+        bracketBase: this.brackets.length,
+      });
       // Skip optional strip marker immediately after ${
       // (Emitted as a separate TEMPLATE_STRIP by the next call.)
       return this.finishTemplateStructural(
@@ -644,7 +655,12 @@ export class Lexer {
     }
     if (c === PERCENT && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_CONTROL", braceDepth: 0, bodyStart: this.pos });
+      this.pushMode({
+        kind: "TEMPLATE_CONTROL",
+        braceDepth: 0,
+        bodyStart: this.pos,
+        bracketBase: this.brackets.length,
+      });
       return this.finishTemplateStructural(
         TokenKind.TEMPLATE_CONTROL,
         leadingStart,
@@ -869,7 +885,12 @@ export class Lexer {
   }
 
   private popMode(): void {
-    if (this.modes.length > 1) this.modes.pop();
+    if (this.modes.length <= 1) return;
+    const frame = this.modes.pop()!;
+    // Drop brackets a template sequence left open.
+    if (frame.bracketBase !== undefined) {
+      this.brackets.length = frame.bracketBase;
+    }
   }
 
   /** Advance `pos` past exactly one Unicode code point (handles surrogate pairs). */
