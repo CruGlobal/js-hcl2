@@ -33,8 +33,9 @@ export const ANONYMOUS_FILENAME = "<input>";
  * SourceFile is one linear pass over the text.
  *
  * Recognised line terminators: LF (`\n`), CRLF (`\r\n`), and bare CR (`\r`).
- * HCL2's spec only names LF and CRLF, but bare CR is accepted for robustness
- * against files that crossed a Classic-Mac-era checkout.
+ * HCL only names LF and CRLF, and the lexer reports a bare CR as an invalid
+ * character, but positions and snippets still treat one as a line end so
+ * the line of such an error prints without a raw CR in it.
  */
 export class SourceFile {
   readonly filename: string;

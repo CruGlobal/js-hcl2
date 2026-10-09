@@ -299,15 +299,20 @@ The lexer tracks a stack of modes to handle context-sensitive tokens:
    text is an error too, as in Terraform ("Invalid multi-line string"):
    each run of line breaks becomes one `INVALID` token and the string
    continues after it. Heredoc bodies, and the insides of `${ }` and
-   `%{ }`, may span lines.
+   `%{ }`, may span lines; in a heredoc body a lone CR is an `INVALID`
+   token ("invalid character", see §5.3).
 3. `TEMPLATE_INTERP` — inside a `${ ... }`. Same as `NORMAL` but `}` pops
-   back to `TEMPLATE`.
+   back to `TEMPLATE`. As in HCL, `~` is a `TEMPLATE_STRIP` only right
+   after the `${` or right before a `}`; anywhere else it is an `INVALID`
+   token ("unsupported operator", HCL's bitwise NOT).
 4. `TEMPLATE_CONTROL` — inside a `%{ ... }`. Same as `NORMAL` plus the
-   keywords `if`/`else`/`endif`/`for`/`endfor`.
+   keywords `if`/`else`/`endif`/`for`/`endfor`, and the same `~` rule.
 
 Heredocs are handled by detecting `<<IDENT` / `<<-IDENT` in `NORMAL` mode;
 the body is scanned line-by-line in `TEMPLATE` mode until a line equal to
 the delimiter (with optional leading whitespace for `<<-`) is found. The
+opener and the closing delimiter must each be followed by LF or CRLF (the
+closing one may also end the file). The
 lexer preserves the exact indentation so the parser can later compute the
 strip amount required by `<<-`.
 
@@ -315,12 +320,27 @@ strip amount required by `<<-`.
 
 HCL is newline-sensitive at the top level of a body: `foo = 1 bar = 2` is
 illegal, but `foo = 1\nbar = 2` is fine. The lexer emits explicit `NEWLINE`
-tokens, but **suppresses them inside** balanced `()`, `[]`, and `{}` that
-belong to an expression (not a block body). Matching is tracked with a
-bracket stack; block bodies (`{...}` directly after a block header) are
-distinguished from object constructors by the parser, so the lexer
-conservatively emits newlines and the parser ignores them where
-appropriate.
+tokens, and the parser requires one after every statement (§6.1).
+
+Only LF and CRLF are line breaks, as in HCL's scanner. A CR on its own is
+an `INVALID` token ("invalid character") outside strings and comments;
+inside a quoted string it is "invalid multi-line string" (§5.2), and it
+does not end a `#` or `//` comment, which runs on to the next LF.
+(`SourceFile` still counts a lone CR as a line end for positions and
+snippets, so a snippet of such a line stays readable.) A `/*` with no
+`*/` after it is not trivia: it and the rest of the file become one
+`INVALID` token ("unterminated comment").
+
+The lexer **suppresses** `NEWLINE`s inside `()` and `[]`, and inside the
+`${ }` and `%{ }` of a template, but not inside a `{}` opened within any
+of those, where they separate object items again (`"${ {a = 1\nb = 2}.a }"`
+is valid). Matching is tracked with a bracket stack. Each `${ }` / `%{ }`
+owns the brackets opened inside it: a stray `)` or `]` there cannot close
+a bracket opened outside it, and brackets it leaves open are dropped when
+it ends, so an error inside one does not change how later lines are read.
+Block bodies (`{...}` directly after a block header) are distinguished
+from object constructors by the parser, so the lexer conservatively emits
+newlines and the parser ignores them where appropriate.
 
 ### 5.4 Trivia
 
@@ -346,10 +366,27 @@ Directly transcribes the HCL2 grammar:
 ```
 ConfigFile := Body
 Body       := (Attribute | Block)*
-Attribute  := IDENT "=" Expression NEWLINE
-Block      := IDENT (StringLit | IDENT)* "{" Body "}" NEWLINE
-           |  IDENT (StringLit | IDENT)* "{" (IDENT "=" Expression)? "}" NEWLINE   -- one-liner
+Attribute  := IDENT "=" Expression (NEWLINE | EOF)
+Block      := IDENT (StringLit | IDENT)* "{" (NEWLINE Body)? "}" (NEWLINE | EOF)
+           |  IDENT (StringLit | IDENT)* "{" IDENT "=" Expression "}" (NEWLINE | EOF)   -- one-liner
 ```
+
+The parser enforces the line breaks, with Terraform's errors: "missing
+newline after argument" (or "unexpected comma after argument") and
+"missing newline after block definition". A block whose first argument is
+on the same line as its `{` is a one-liner: like hclsyntax, it holds one
+argument and no nested block ("argument definition required") and must
+close on that line ("invalid single-argument block definition"). If the
+line ends first, the error is reported and the rest of the block is read
+as an ordinary body.
+
+An argument may be set only once per body. Every repeat is reported at
+its name ("attribute redefined: the argument "a" was already set at line
+1, column 1; each argument may be set only once"); blocks may repeat.
+This check lives in the parser, not a later validation pass, because
+hclsyntax reports it while parsing a body, so `terraform fmt` rejects
+the file, and because `parse()` would otherwise keep only the last value
+without a word.
 
 ### 6.2 Expression parser
 
@@ -366,10 +403,22 @@ Additive   := Multiplicative (("+"|"-") Multiplicative)*
 Multiplicative := Unary (("*"|"/"|"%") Unary)*
 Unary      := ("-"|"!") Unary | Postfix
 Postfix    := Primary (GetAttr | Index | Splat)*
+GetAttr    := "." (IDENT | NUMBER)          -- NUMBER: legacy `a.0`
+Splat      := "." "*" GetAttr*              -- attribute-only splat
+           |  "[" "*" "]" (GetAttr | Index)*  -- full splat
 Primary    := Literal | CollectionCtor | TemplateExpr | ForExpr
            |  FunctionCall | IDENT | "(" Expression ")"
 FunctionCall := IDENT ("::" IDENT)* "(" Arguments? ")"
 ```
+
+The splat rules are the HCL spec's. After `.*` only attribute names
+follow, so in `x.*.y[0]` the index applies to the splat's result (a
+traversal over the splat), and another `.*` inside it is an error
+("nested splat expression not allowed"). After `[*]` any names and
+indexes follow. A splat after a splat (`x[*].y[*].z`, `x.*[*]`) starts a
+new splat node whose source is the one before. A `.` followed by
+anything but a name is "invalid attribute name", and the token after the
+dot is left for the caller.
 
 An identifier followed by `(` or `::` always starts a call, even a
 keyword (`true(1)` is a call named `true`, as in HCL). The `::` form is a
@@ -397,6 +446,7 @@ type ExprNode =
   | BinaryOpNode         // { kind: "binary", op, left, right }
   | UnaryOpNode          // { kind: "unary", op, operand }
   | SplatNode            // { kind: "splat", source, each: Step[], style: "attr" | "full" }
+                         //   "attr" steps are GetAttr only; see §6.2
   | ParensNode;          // { kind: "parens", inner }
 ```
 
@@ -428,7 +478,14 @@ useful: the parse tree is complete, re-printable, and easy to reason about.
 In `bail: false` mode, the parser synchronizes on `NEWLINE` and block
 boundaries, records an `HCLParseError`, and continues. The tokens it
 skips stay in the body's CST, and a `}` with no block to close is kept
-and stepped over, so recovery always moves forward. This powers
+and stepped over, so recovery always moves forward. When a statement's
+line has more on it, the rest of the line is skipped, but a `}` that
+closes the enclosing block still closes it. A template directive whose
+end marker is missing ends at its template's closing quote or heredoc
+marker ("unexpected end of template"), and one that meets the wrong
+marker ends there, as in hclsyntax, so recovery never runs past the end
+of the string. A token the lexer could not read (`INVALID`) is reported
+once, with its own message, however many rules trip over it. This powers
 editor-friendly use cases (LSP implementations, config validators) without
 requiring every downstream tool to tolerate exceptions.
 

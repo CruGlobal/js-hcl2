@@ -266,7 +266,10 @@ export interface IndexStep {
 
 /**
  * Attribute-only (`source.*.a.b`) or full (`source[*].a.b`) splat.
- * Steps after the splat marker are collected into `each`.
+ * Steps after the splat marker are collected into `each`. As in the HCL
+ * spec, an attribute-only splat's steps are GetAttr only (an index after
+ * it applies to the splat's result), and a splat that follows a splat is
+ * a new SplatNode whose `source` is the one before.
  */
 export interface SplatNode extends NodeBase {
   readonly kind: "Splat";

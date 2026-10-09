@@ -239,26 +239,27 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 
 | Feature                                                | Supported | Notes |
 | ------------------------------------------------------ | :-------: | ----- |
-| Attributes                                             | ✅        |       |
+| Attributes                                             | ✅        | Each ends at a line break or the end of the file, and may be set once per body; `a = 1 b = 2` and a repeated name are parse errors, as in Terraform. |
 | Blocks (0 / 1 / 2 / 3+ labels)                         | ✅        | Quoted labels are read with their escapes applied, as in Terraform (`"\u00e9"` is `é`). |
-| One-liner blocks (`block { k = v }`)                   | ✅        |       |
+| One-liner blocks (`block { k = v }`)                   | ✅        | One argument, closed on the same line, as in Terraform. |
+| Line breaks (LF, CRLF)                                 | ✅        | A CR on its own is a parse error outside strings and comments (Terraform's "Invalid character"). |
 | Line comments (`#`, `//`)                              | ✅        |       |
-| Block comments (`/* … */`)                             | ✅        |       |
+| Block comments (`/* … */`)                             | ✅        | A `/*` with no `*/` is a parse error. |
 | Primitive literals: number, bool, `null`, string       | ✅        | Numbers are finite JS doubles; NaN/Infinity encode as `null` on emit. |
 | Quoted strings with escapes (`\n \t \" \\ \uNNNN`)     | ✅        | Only the escapes HCL defines: `\n \r \t \" \\ \uNNNN \UNNNNNNNN`. Any other backslash escape is a parse error, as in Terraform. Heredoc bodies keep `\` as plain text. A raw line break inside a quoted string is a parse error too (Terraform's "Invalid multi-line string"); use `\n` or a heredoc. |
 | Heredocs (`<<EOT … EOT`)                               | ✅        |       |
 | Heredoc strip form (`<<-EOT`)                          | ✅        | Recognised structurally; body content stored verbatim (strip happens at evaluation time — see below). |
 | Tuple and object literals (with trailing commas)       | ✅        |       |
 | Traversal (`.attr`, `[expr]`, legacy `.digit`)         | ✅        |       |
-| Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        |       |
+| Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        | As in the HCL spec, `.*` takes attribute names only (in `a.*.b[0]` the index applies to the result), and splats can follow splats (`a[*].b[*].c`). |
 | Function calls (`f(a, b, c...)`)                       | ✅        | Includes provider-defined functions (`provider::aws::arn_parse(x)`); the call's `name` joins the segments with `::`. |
 | Unary `-` / `!`                                        | ✅        |       |
 | Binary `+ - * / % == != < <= > >= && \|\|`             | ✅        |       |
 | Conditional `cond ? then : else`                       | ✅        |       |
 | For expressions (tuple + object form with `if`, `...`) | ✅        |       |
 | Template interpolation (`${…}`) in strings + heredocs  | ✅        |       |
-| Template control directives (`%{if}`, `%{for}`)        | ✅        |       |
-| Strip markers (`${~ ~}`, `%{~ ~}`)                     | ✅        |       |
+| Template control directives (`%{if}`, `%{for}`)        | ✅        | A missing or wrong end marker is reported as in Terraform. |
+| Strip markers (`${~ ~}`, `%{~ ~}`)                     | ✅        | `~` must touch the `${`, `%{` or `}`; elsewhere it is a parse error, as in Terraform. |
 | Unicode identifiers (UAX #31) + dash in ID_Continue    | ✅        | An identifier may also start with `_`, as in HCL's reference scanner (`_`, `_46fe`, `for _, v in ...`). |
 
 ### Out of scope for v0.x
