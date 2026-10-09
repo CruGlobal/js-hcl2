@@ -39,11 +39,11 @@ npm (`package.json#files` and `.npmignore` exclude `test/`).
 ## `handwritten/` — BSD-3-Clause
 
 - **Author:** this repository. No external license obligations.
-- **Contents:** nine hand-crafted fixtures that exercise patterns
+- **Contents:** ten hand-crafted fixtures that exercise patterns
   underrepresented in the vendored sets — complex comment trivia,
   unicode identifiers and string content, identifiers that start with
-  an underscore, object attributes whose keys need quotes, every
-  heredoc variant,
+  an underscore, object attributes whose keys need quotes, lists of
+  objects and repeated blocks, every heredoc variant,
   nested interpolation + template directives, every expression form
   (operators / collections / traversals / splats / for-expressions /
   splats), a realistic Terraform-shaped module, and assorted edge

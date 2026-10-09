@@ -190,6 +190,67 @@ describe("block grouping", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Lists of objects. One block parses as an object, and repeated blocks
+// parse as a list, so only a list of two or more can be blocks.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("lists of objects", () => {
+  it("writes a one-item list of objects as a tuple", () => {
+    const v = { xs: [{ a: 1 }] };
+    const out = stringify(v);
+    expect(out).toBe("xs = [{ a = 1 }]\n");
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("keeps a one-item list in a labeled block's body", () => {
+    const text =
+      'variable "services" {\n' +
+      '  default = [{ name = "app" }]\n' +
+      "  type = list(object({ name = string }))\n" +
+      "}\n";
+    expect(stringify(parse(text))).toBe(text);
+  });
+
+  it("does not peel the label above a one-item list", () => {
+    const v = { a: { b: [{ x: 1 }] } };
+    const out = stringify(v);
+    expect(out).toBe("a {\n  b = [{ x = 1 }]\n}\n");
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("still writes two or more objects under a label as repeated blocks", () => {
+    const v = { a: { b: [{ x: 1 }, { x: 2 }] } };
+    const out = stringify(v);
+    expect(out).toBe('a "b" {\n  x = 1\n}\na "b" {\n  x = 2\n}\n');
+    expect(parse(out)).toEqual(v);
+  });
+
+  it("does not peel a repeated block's keys into labels", () => {
+    const text =
+      'resource "google_storage_bucket" "logs" {\n' +
+      '  name = "logs"\n' +
+      "  lifecycle_rule {\n" +
+      "    action {\n" +
+      '      type = "Delete"\n' +
+      "    }\n" +
+      "    condition {\n" +
+      "      age = 30\n" +
+      "    }\n" +
+      "  }\n" +
+      "  lifecycle_rule {\n" +
+      "    action {\n" +
+      '      type = "SetStorageClass"\n' +
+      "    }\n" +
+      "    condition {\n" +
+      "      age = 7\n" +
+      "    }\n" +
+      "  }\n" +
+      "}\n";
+    expect(stringify(parse(text))).toBe(text);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Objects whose keys need quotes. A block body can only hold bare names,
 // so these must be written as object-literal attributes.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -449,7 +510,7 @@ describe("golden (input → canonical output)", () => {
     [
       "inline object literal inside tuple",
       { xs: [{ a: 1 }] as unknown as Value },
-      "xs {\n  a = 1\n}\n",
+      "xs = [{ a = 1 }]\n",
     ],
     [
       "empty block",
