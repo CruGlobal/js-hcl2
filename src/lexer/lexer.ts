@@ -21,7 +21,8 @@
  * and absorbed into leading trivia. Braces (`{...}`) do NOT suppress
  * newlines at the lexer level; the parser decides later whether a given
  * brace pair is a block body (newlines significant) or an object literal
- * (newlines ignored).
+ * (newlines ignored). A raw line break in quoted-string text is an error
+ * in HCL, so it lexes as an INVALID token (heredoc bodies keep theirs).
  */
 
 import type { Position, Range, SourceFile } from "../source.js";
@@ -669,10 +670,27 @@ export class Lexer {
 
       if (mode.heredoc === undefined) {
         if (c === QUOTE) break;
-        // Quoted strings technically disallow raw newlines per the HCL
-        // spec, but the lexer absorbs them into the QUOTED_LIT so that we
-        // always make forward progress. The parser is responsible for
-        // flagging the semantic error.
+        if (c === LF || c === CR) {
+          // HCL does not allow a raw line break in a quoted string. End the
+          // literal here; the next call emits the run of line breaks as one
+          // INVALID token and the string carries on after it, so the
+          // parser reports the error and the CST stays lossless.
+          if (this.pos > lexemeStart) break;
+          while (
+            this.text.charCodeAt(this.pos) === LF ||
+            this.text.charCodeAt(this.pos) === CR
+          ) {
+            this.pos++;
+          }
+          return this.make(
+            TokenKind.INVALID,
+            leadingStart,
+            lexemeStart,
+            this.pos,
+            this.pos,
+            MULTI_LINE_STRING,
+          );
+        }
       } else {
         if (c === LF || c === CR) {
           // Advance past the newline as part of the literal, then check
@@ -828,6 +846,10 @@ function isDigit(c: number): boolean {
 function isHexDigit(c: number): boolean {
   return isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
 }
+
+const MULTI_LINE_STRING =
+  "invalid multi-line string: a quoted string cannot span lines; " +
+  "write \\n for a line break, or use a heredoc";
 
 const VALID_ESCAPES =
   'HCL allows \\n, \\r, \\t, \\", \\\\, \\uNNNN and \\UNNNNNNNN; ' +

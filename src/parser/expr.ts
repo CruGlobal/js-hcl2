@@ -1101,9 +1101,10 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
 
 /**
  * Consume a run of literal text in a template body. Inside a template the
- * lexer emits INVALID only for a backslash escape HCL does not define:
- * report it, then keep its text as a literal part so the CST stays
- * complete and still prints back byte for byte.
+ * lexer emits INVALID only for a backslash escape HCL does not define or
+ * a raw line break in a quoted string: report it, then keep its text as a
+ * literal part so the CST stays complete and still prints back byte for
+ * byte.
  */
 function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   const strTok = ctx.consume();

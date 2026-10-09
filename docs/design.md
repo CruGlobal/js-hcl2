@@ -284,7 +284,11 @@ The lexer tracks a stack of modes to handle context-sensitive tokens:
 1. `NORMAL` — default. Parses identifiers, numbers, operators, etc.
 2. `TEMPLATE` — inside a `"..."` quoted string or heredoc body. Most
    characters become template-literal text; `${`, `%{`, `\"`, `\n`,
-   `\uNNNN`, `\\` are special. In a quoted string a backslash must start
+   `\uNNNN`, `\\` are special. A raw line break (LF, CRLF or a lone CR)
+   in quoted-string text is an error, as in Terraform ("Invalid
+   multi-line string"): each run of line breaks becomes one `INVALID`
+   token and the string continues after it. Heredoc bodies, and the
+   insides of `${ }` / `%{ }`, may span lines. In a quoted string a backslash must start
    one of the escapes HCL defines: `\n \r \t \" \\`, `\u` + 4 hex digits,
    or `\U` + 8 hex digits naming a Unicode character. Any other backslash
    sequence becomes an `INVALID` token, and the parser reports its error,

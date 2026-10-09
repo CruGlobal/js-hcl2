@@ -280,8 +280,8 @@ export class Parser {
             inner.kind === TokenKind.QUOTED_LIT ||
             inner.kind === TokenKind.INVALID
           ) {
-            // INVALID here is a bad backslash escape: report it and keep
-            // its text so the label and the CST stay complete.
+            // INVALID here is a bad backslash escape or a raw line break:
+            // report it and keep its text so the CST stays complete.
             literalParts.push(inner.lexeme);
             parts.push(this.consume());
             if (inner.kind === TokenKind.INVALID) {
