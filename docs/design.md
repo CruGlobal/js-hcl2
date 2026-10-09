@@ -136,7 +136,7 @@ Design notes:
   appears only once, it is still nested by label. This matches the
   convention used by `hcl2-json-parser` and Terraform's JSON output.
 - **Labels are decoded.** A quoted label is read the way Terraform reads
-  it, with its escapes applied: `b "é" {}` nests under `é`, and
+  it, with its escapes applied: `b "\u00e9" {}` nests under `é`, and
   `b "$${x}" {}` under `${x}`. `parse`, `Document.toValue()` and
   `Document.get` all use the decoded text; the CST keeps the source.
 
@@ -290,16 +290,16 @@ The lexer tracks a stack of modes to handle context-sensitive tokens:
 1. `NORMAL` — default. Parses identifiers, numbers, operators, etc.
 2. `TEMPLATE` — inside a `"..."` quoted string or heredoc body. Most
    characters become template-literal text; `${`, `%{`, `\"`, `\n`,
-   `\uNNNN`, `\\` are special. A raw line break (LF, CRLF or a lone CR)
-   in quoted-string text is an error, as in Terraform ("Invalid
-   multi-line string"): each run of line breaks becomes one `INVALID`
-   token and the string continues after it. Heredoc bodies, and the
-   insides of `${ }` / `%{ }`, may span lines. In a quoted string a backslash must start
+   `\uNNNN`, `\\` are special. In a quoted string a backslash must start
    one of the escapes HCL defines: `\n \r \t \" \\`, `\u` + 4 hex digits,
    or `\U` + 8 hex digits naming a Unicode character. Any other backslash
    sequence becomes an `INVALID` token, and the parser reports its error,
    matching Terraform's "Invalid escape sequence". Heredoc bodies treat `\`
-   as plain text.
+   as plain text. A raw line break (LF, CRLF or a lone CR) in quoted-string
+   text is an error too, as in Terraform ("Invalid multi-line string"):
+   each run of line breaks becomes one `INVALID` token and the string
+   continues after it. Heredoc bodies, and the insides of `${ }` and
+   `%{ }`, may span lines.
 3. `TEMPLATE_INTERP` — inside a `${ ... }`. Same as `NORMAL` but `}` pops
    back to `TEMPLATE`.
 4. `TEMPLATE_CONTROL` — inside a `%{ ... }`. Same as `NORMAL` plus the

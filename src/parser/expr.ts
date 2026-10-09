@@ -881,8 +881,8 @@ function parseTemplateBody(
       templateParts.push(directive);
       continue;
     }
-    // Anything else inside a template body is a lexer bug or structural
-    // error — emit and try to make progress. Keep the token so the CST
+    // Anything else inside a template body is a lexer bug or a structural
+    // error. Report it and step past it, keeping the token so the CST
     // stays lossless.
     ctx.errorAt(tok.range, `unexpected ${tok.kind} in template body`);
     parts.push(ctx.consume());
