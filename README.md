@@ -240,7 +240,7 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Feature                                                | Supported | Notes |
 | ------------------------------------------------------ | :-------: | ----- |
 | Attributes                                             | ✅        |       |
-| Blocks (0 / 1 / 2 / 3+ labels)                         | ✅        |       |
+| Blocks (0 / 1 / 2 / 3+ labels)                         | ✅        | Quoted labels are read with their escapes applied, as in Terraform (`"\u00e9"` is `é`). |
 | One-liner blocks (`block { k = v }`)                   | ✅        |       |
 | Line comments (`#`, `//`)                              | ✅        |       |
 | Block comments (`/* … */`)                             | ✅        |       |

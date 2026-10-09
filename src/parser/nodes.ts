@@ -73,6 +73,11 @@ export interface BlockLabelsNode extends NodeBase {
 }
 
 export interface LabelInfo {
+  /**
+   * The label as Terraform reads it. For a quoted label, escapes are
+   * applied (`"é"` gives `é`, `"$${x}"` gives `${x}`); the source
+   * text stays in the BlockLabels node's tokens.
+   */
   readonly value: string;
   readonly quoted: boolean;
 }

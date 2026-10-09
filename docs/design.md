@@ -135,6 +135,10 @@ Design notes:
   `{ resource: { aws_s3_bucket: { a: {...}, b: {...} } } }`. When a block
   appears only once, it is still nested by label. This matches the
   convention used by `hcl2-json-parser` and Terraform's JSON output.
+- **Labels are decoded.** A quoted label is read the way Terraform reads
+  it, with its escapes applied: `b "é" {}` nests under `é`, and
+  `b "$${x}" {}` under `${x}`. `parse`, `Document.toValue()` and
+  `Document.get` all use the decoded text; the CST keeps the source.
 
 ### 3.2 `HCL.stringify(value, options?) => string`
 

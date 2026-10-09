@@ -33,6 +33,7 @@ import type {
   Node,
 } from "./nodes.js";
 import { parseExpression as parseExpressionNode } from "./expr.js";
+import { unescapeTemplateLiteral } from "../value.js";
 
 export interface ParserOptions {
   /** Throw on the first error (true) or collect all errors (false). Default: true. */
@@ -320,7 +321,12 @@ export class Parser {
           this.errorAt(inner.range, `unexpected ${inner.kind} inside block label`);
           break;
         }
-        labels.push({ value: literalParts.join(""), quoted: true });
+        // Store the label as Terraform reads it, with escapes applied.
+        // The tokens in `parts` keep the source text for printing.
+        labels.push({
+          value: unescapeTemplateLiteral(literalParts.join(""), false),
+          quoted: true,
+        });
         continue;
       }
       // Anything else in the label position is a structural error.
