@@ -822,6 +822,40 @@ describe("suppressed newlines inside interpolations", () => {
   });
 });
 
+describe("newlines inside a { for } expression", () => {
+  // A `{` that opens a for expression treats line breaks as whitespace,
+  // like `(` and `[`; an object `{ }` inside it separates items again.
+  function newlineOffsets(input: string): number[] {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.NEWLINE)
+      .map((t) => t.range.start.offset);
+  }
+
+  it.each([
+    ["at the top level", "a = {for k, v in x : k => v\n.arn}\n"],
+    ["after a comment", "a = { # c\nfor k, v in x : k => v\n.arn}\n"],
+    ["with no spaces", "a = {for k,v in x:k=>v\n.arn}\n"],
+    ["in ${ }", 'a = "${ {for k, v in x : k => v\n.arn} }"\n'],
+    ["after in", 'a = "%{ for v in {for k, v in x : k => v\n.y} }x%{ endfor }"\n'],
+  ])("keeps line breaks as whitespace %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+    expectRejoin(input);
+  });
+
+  it("emits NEWLINE between the items of an object inside it", () => {
+    const input = "a = {for k in x : k => {y = 1\nz = 2}}\n";
+    expect(newlineOffsets(input)).toEqual([input.indexOf("1\nz") + 1, input.length - 1]);
+  });
+
+  it.each([
+    ["an object", "a = {\nk = 1\n}\n", 3],
+    ["a block body starting with an argument named for", "b {\nfor = 1\n}\n", 3],
+    ["a block body starting with a block named for", "b {\nfor x in {\n}\n}\n", 4],
+  ])("keeps NEWLINE tokens in %s", (_ctx, input, count) => {
+    expect(newlineOffsets(input)).toHaveLength(count);
+  });
+});
+
 describe("supplementary-plane identifiers", () => {
   it("recognizes CJK Extension B code points (surrogate pairs)", () => {
     // U+20000 is a CJK ideograph in the supplementary plane.

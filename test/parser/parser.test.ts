@@ -477,6 +477,65 @@ describe("template directives that do not balance", () => {
   });
 });
 
+describe("line breaks inside a { for } expression", () => {
+  // hclsyntax ignores line breaks anywhere inside a for expression
+  // (finishParsingForExpr), even in an object `{ for ... }`, which is
+  // otherwise newline-sensitive. Each body below has a line break inside
+  // a value; Terraform accepts every one in every context.
+  const bodies = [
+    "{for k, v in x : k => v\n.arn}",
+    "{for k, v in x : k => v.a\n+ v.b}",
+    "{for k, v in x : k => v.a +\nv.b}",
+    "{for k, v in x : k => v if v.a\n&& v.b}",
+    "{for k, v in x : k => v if v.a &&\nv.b}",
+    "{for k, v in x : k => v\n? 1 : 2}",
+    "{for k, v in x : k => v ?\n1 : 2}",
+    "{for k, v in x : k => f(v)\n[0]}",
+    "{for k, v in x : k\n=> v}",
+    "{for k, v in x : k => v\nif v}",
+    "{for k, v in x : k => v\n}",
+    "{for k, v in x : k => v\n...}",
+    "{for k, v in x : k => {a = v\nb = 2}}",
+    "{\nfor k, v in x : k => v\n.arn}",
+    "{ # c\nfor k, v in x : k => v\n.arn}",
+    "{ /* c */ for k, v in x : k => v\n.arn}",
+    "{for k, v in x : k => [for w in v : w\n.y]}",
+    "{for k, v in x : k => v[*\n].y}",
+  ];
+  const contexts: Array<[string, (b: string) => string]> = [
+    ["at the top level", (b) => `a = ${b}\n`],
+    ["in ${ }", (b) => `a = "\${ ${b} }"\n`],
+    ["in a heredoc", (b) => `a = <<EOT\n\${jsonencode(${b})}\nEOT\n`],
+    ["in %{ for }", (b) => `a = "%{ for v in ${b} }x%{ endfor }"\n`],
+  ];
+
+  it.each(contexts.flatMap(([where, wrap]) => bodies.map((b) => [where, wrap(b)])))(
+    "accepts a line break inside a value %s: %j",
+    (_where, input) => {
+      expectRoundTrip(input);
+    },
+  );
+
+  it("still needs separators between the items of an object inside it", () => {
+    const errors = parse(new SourceFile("a = {for k in x : k => {y = 1 z = 2}}\n"), {
+      bail: false,
+    }).errors;
+    expect(errors[0]!.message).toMatch(/^expected ',' or newline between object items/);
+  });
+
+  it.each([
+    ["an argument named for", "b {\n  for = 1\n}\n"],
+    ["a block named for", "b {\n  for x in {\n  }\n}\n"],
+  ])("still reads a block body that starts with %s", (_ctx, input) => {
+    const { body } = parseOK(input);
+    expect(print(body)).toBe(input);
+    const inner = body.blocks[0]!.body;
+    expect([...inner.attributes, ...inner.blocks].map((s) => s.kind)).toEqual([
+      input.includes("=") ? "Attribute" : "Block",
+    ]);
+  });
+});
+
 describe("objects over several lines inside ${ } and %{ }", () => {
   it.each([
     ["in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
