@@ -359,6 +359,31 @@ describe("splat steps", () => {
     expect(print(expr)).toBe("x[*].y[*].z");
   });
 
+  it.each([
+    ["x[*\\n]", "a = x[*\n]\n", /^missing close bracket on splat index/],
+    ["x[*# c\\n]", "a = x[*# c\n]\n", /^missing close bracket on splat index/],
+    ["x[*].y[*\\n].z", "a = x[*].y[*\n].z\n", /^missing close bracket on splat index/],
+    ["x[*\\n] in an object", "a = {k = x[*\n]}\n", /^missing close bracket on splat index/],
+    ["x[\\n*]", "a = x[\n*]\n", /^expected expression/],
+    ["x[*].y[\\n*].z", "a = x[*].y[\n*].z\n", /^expected expression/],
+  ])("rejects a line break inside [*] where line breaks count: %s", (_ctx, input, message) => {
+    const errors = errorsIn(input);
+    expect(errors[0]!.message).toMatch(message);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it.each([
+    ["inside a list", "a = [x[\n*]]\n"],
+    ["inside parentheses", "a = (x[*\n])\n"],
+    ["inside ${ }", 'a = "${x[*\n]}"\n'],
+    ["inside a list for", "a = [for v in x : v[*\n]]\n"],
+    ["inside an object for", "a = {for k, v in x : k => v[*\n]}\n"],
+    ["with spaces", "a = x[ * ]\n"],
+    ["with a /* */ comment", "a = x[/* c */*]\n"],
+  ])("accepts [*] %s", (_ctx, input) => {
+    expect(errorsIn(input)).toEqual([]);
+  });
+
   it("leaves inner null for a splat with no later splat", () => {
     for (const input of ["x[*].y", "x.*.y", "x[*]"]) {
       const expr = expectNoErrors(input);
