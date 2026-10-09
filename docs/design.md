@@ -409,7 +409,9 @@ useful: the parse tree is complete, re-printable, and easy to reason about.
 ### 6.5 Error recovery
 
 In `bail: false` mode, the parser synchronizes on `NEWLINE` and block
-boundaries, records an `HCLParseError`, and continues. This powers
+boundaries, records an `HCLParseError`, and continues. The tokens it
+skips stay in the body's CST, and a `}` with no block to close is kept
+and stepped over, so recovery always moves forward. This powers
 editor-friendly use cases (LSP implementations, config validators) without
 requiring every downstream tool to tolerate exceptions.
 
