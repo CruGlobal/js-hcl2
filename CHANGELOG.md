@@ -5,6 +5,18 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4](https://github.com/CruGlobal/js-hcl2/compare/v0.1.3...v0.1.4) (2026-10-09)
+
+
+### Added
+
+* parse provider functions, decode block labels, reject multi-line strings, fix bail: false loop ([#71](https://github.com/CruGlobal/js-hcl2/issues/71)) ([7e367f3](https://github.com/CruGlobal/js-hcl2/commit/7e367f3b368a93c981e583394d1f34a156f44f70))
+
+
+### Changed
+
+* **deps-dev:** Bump source-map-js from 1.2.1 to 1.2.2 ([#70](https://github.com/CruGlobal/js-hcl2/issues/70)) ([2bf9c80](https://github.com/CruGlobal/js-hcl2/commit/2bf9c802976477e05c1f82920bdf3c4bc0d0cf00))
+
 ## [0.1.3](https://github.com/CruGlobal/js-hcl2/compare/v0.1.2...v0.1.3) (2026-10-08)
 
 
