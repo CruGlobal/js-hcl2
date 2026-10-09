@@ -240,18 +240,18 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Feature                                                | Supported | Notes |
 | ------------------------------------------------------ | :-------: | ----- |
 | Attributes                                             | ✅        |       |
-| Blocks (0 / 1 / 2 / 3+ labels)                         | ✅        |       |
+| Blocks (0 / 1 / 2 / 3+ labels)                         | ✅        | Quoted labels are read with their escapes applied, as in Terraform (`"\u00e9"` is `é`). |
 | One-liner blocks (`block { k = v }`)                   | ✅        |       |
 | Line comments (`#`, `//`)                              | ✅        |       |
 | Block comments (`/* … */`)                             | ✅        |       |
 | Primitive literals: number, bool, `null`, string       | ✅        | Numbers are finite JS doubles; NaN/Infinity encode as `null` on emit. |
-| Quoted strings with escapes (`\n \t \" \\ \uNNNN`)     | ✅        | Only the escapes HCL defines: `\n \r \t \" \\ \uNNNN \UNNNNNNNN`. Any other backslash escape is a parse error, as in Terraform. Heredoc bodies keep `\` as plain text. |
+| Quoted strings with escapes (`\n \t \" \\ \uNNNN`)     | ✅        | Only the escapes HCL defines: `\n \r \t \" \\ \uNNNN \UNNNNNNNN`. Any other backslash escape is a parse error, as in Terraform. Heredoc bodies keep `\` as plain text. A raw line break inside a quoted string is a parse error too (Terraform's "Invalid multi-line string"); use `\n` or a heredoc. |
 | Heredocs (`<<EOT … EOT`)                               | ✅        |       |
 | Heredoc strip form (`<<-EOT`)                          | ✅        | Recognised structurally; body content stored verbatim (strip happens at evaluation time — see below). |
 | Tuple and object literals (with trailing commas)       | ✅        |       |
 | Traversal (`.attr`, `[expr]`, legacy `.digit`)         | ✅        |       |
 | Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        |       |
-| Function calls (`f(a, b, c...)`)                       | ✅        |       |
+| Function calls (`f(a, b, c...)`)                       | ✅        | Includes provider-defined functions (`provider::aws::arn_parse(x)`); the call's `name` joins the segments with `::`. |
 | Unary `-` / `!`                                        | ✅        |       |
 | Binary `+ - * / % == != < <= > >= && \|\|`             | ✅        |       |
 | Conditional `cond ? then : else`                       | ✅        |       |

@@ -103,6 +103,17 @@ describe("blocks", () => {
     expect(blk.body.attributes).toHaveLength(1);
   });
 
+  it("stores a quoted label's decoded text and keeps its source", () => {
+    const input = 'b "\\u00e9\\"" "$${x}" bare {}\n';
+    const { body } = parseOK(input);
+    expect(body.blocks[0]!.labels!.labels).toEqual([
+      { value: 'é"', quoted: true },
+      { value: "${x}", quoted: true },
+      { value: "bare", quoted: false },
+    ]);
+    expect(print(body)).toBe(input);
+  });
+
   it("parses a block with one string label", () => {
     const { body } = parseOK('module "m" {\n  source = "./m"\n}\n');
     const blk = body.blocks[0]!;
@@ -292,6 +303,106 @@ describe("invalid escape sequences in quoted strings", () => {
     const input = 'a = "x\\qy${z}\\.w"\nblock "l\\q" {}\n';
     const result = parse(new SourceFile(input), { bail: false });
     expect(result.errors).toHaveLength(3);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
+describe("raw newlines in quoted strings", () => {
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it("reports the newline Terraform rejects, at the newline", () => {
+    const input = 'a = "abc\ndef"\n';
+    const errors = errorsOf(input);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/^invalid multi-line string/);
+    expect(errors[0]!.line).toBe(1);
+    expect(errors[0]!.column).toBe(input.indexOf("\n") + 1);
+  });
+
+  it("throws on a raw newline when bail is true (default)", () => {
+    expect(() => parse(new SourceFile('a = "x\ny"\n'))).toThrow(
+      /invalid multi-line string/,
+    );
+  });
+
+  it.each([
+    ["LF", 'a = "abc\ndef"\n'],
+    ["CRLF", 'a = "abc\r\ndef"\r\n'],
+    ["lone CR", 'a = "abc\rdef"\n'],
+    ["blank line", 'a = "abc\n\ndef"\n'],
+    ["only a newline", 'a = "\n"\n'],
+    ["after an interpolation", 'a = "${x}\ny"\n'],
+    ["between template directives", 'a = "%{ if x }\n%{ endif }"\n'],
+    ["block label", 'b "a\nb" {}\n'],
+    ["object key", 'a = { "k\nk" = 1 }\n'],
+    ["function argument", 'a = f("x\ny")\n'],
+    ["quoted string in a heredoc interpolation", 'a = <<EOT\n${"a\nb"}\nEOT\n'],
+  ])("reports a raw newline: %s", (_ctx, input) => {
+    expect(errorsOf(input).map((e) => e.message)).toEqual([
+      expect.stringMatching(/^invalid multi-line string/),
+    ]);
+  });
+
+  it.each([
+    ["interpolation", 'a = "${\nx\n}"\n'],
+    ["call inside an interpolation", 'a = "${foo(\n1,\n2)}"\n'],
+    ["if directive", 'a = "%{ if\nx }y%{ endif }"\n'],
+    ["heredoc body", "a = <<EOT\nx\n\ny\nEOT\n"],
+  ])("accepts newlines inside: %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps the CST lossless when recovering from a raw newline", () => {
+    const input = 'a = "x\ny"\nb "l\r\nm" {}\n';
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(2);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
+describe("provider-defined functions", () => {
+  it.each([
+    ["an attribute", 'a = provider::aws::arn_parse("x")\n'],
+    ["multi-line arguments", 'a = provider::aws::arn_parse(\n  "x",\n)\n'],
+    ["a line break after :: inside parentheses", "a = f(provider::\naws::g())\n"],
+    ["an interpolation", 'a = "${provider::aws::arn_parse(x).account_id}"\n'],
+    ["an if directive", 'a = "%{ if a::b() }x%{ endif }"\n'],
+    ["a conditional", "a = x ? provider::a::b(1) : 2\n"],
+    ["a conditional without spaces", "a = x ?y::z(1):2\n"],
+    ["an object for expression", "a = { for k, v in m : k => provider::d::m(v) }\n"],
+    ["a tuple for expression", "a = [for x in xs : provider::d::f(x)]\n"],
+    ["an expanded argument", "a = f(provider::a::b(1)...)\n"],
+    ["a one-line block", 'b "x" { c = d::e(1) }\n'],
+    ["unary and binary operators", "a = !p::q(1) && r::s(2)\n"],
+    ["an index and a splat", "a = provider::a::b(1)[0]\nb = provider::a::b(1)[*].c\n"],
+  ])("parses a provider function in %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it.each([
+    ["no name after ::", "a = provider::\n", /^missing function name/],
+    ["a line break after ::", "a = provider::\naws::g()\n", /^missing function name/],
+    [":::", "a = provider:::aws::f(1)\n", /^missing function name/],
+    ["no ( after the name", "a = provider::aws::arn_parse\n", /^missing open parenthesis/],
+    ["one :: and no (", "a = b::c\n", /^missing open parenthesis/],
+    ["( on the next line", "a = provider::a::b\n(1)\n", /^missing open parenthesis/],
+    ["a conditional with :: and no (", "a = x ? y ::z\n", /^missing open parenthesis/],
+  ])("reports %s as Terraform does", (_ctx, input, message) => {
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors[0]?.message).toMatch(message);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it.each([
+    ["an index", "a = x[0]::y()\n"],
+    ["a call", "a = provider::aws::arn_parse()::x()\n"],
+    ["an object", "a = { k = 1 } ::x\n"],
+    ["a string", 'a = "x" ::"y"\n'],
+  ])("rejects :: after %s", (_ctx, input) => {
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors.length).toBeGreaterThan(0);
     expect(print(result.body)).toBe(input);
   });
 });

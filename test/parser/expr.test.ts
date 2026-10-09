@@ -307,6 +307,49 @@ describe("function calls", () => {
   });
 });
 
+describe("provider-defined functions", () => {
+  it("parses provider::ns::fn(...) as one call named by every segment", () => {
+    const text = 'provider::aws::arn_parse("x")';
+    const expr = expectNoErrors(text);
+    expect(expr.kind).toBe("Call");
+    if (expr.kind === "Call") {
+      expect(expr.name).toBe("provider::aws::arn_parse");
+      expect(expr.nameToken.lexeme).toBe("provider");
+      expect(expr.args).toHaveLength(1);
+      expect(expr.range.start.offset).toBe(0);
+      expect(expr.range.end.offset).toBe(text.length);
+    }
+    expect(print(expr)).toBe(text);
+  });
+
+  it.each([
+    ["two segments", "core::max(1, 2)", "core::max"],
+    ["four segments", "provider::a::b::c(1)", "provider::a::b::c"],
+    ["spaces around ::", "provider :: aws :: arn_parse(x)", "provider::aws::arn_parse"],
+    ["a space before (", "provider::aws::arn_parse (x)", "provider::aws::arn_parse"],
+    ["keywords as segments", "provider::for::if(1)", "provider::for::if"],
+    ["a keyword as the first segment", "null::f()", "null::f"],
+    ["an expanded final argument", "provider::a::b(xs...)", "provider::a::b"],
+  ])("parses a call with %s", (_ctx, text, name) => {
+    const expr = expectNoErrors(text);
+    expect(expr.kind).toBe("Call");
+    if (expr.kind === "Call") expect(expr.name).toBe(name);
+    expect(print(expr)).toBe(text);
+  });
+
+  it("parses a keyword followed by ( as a call, as HCL does", () => {
+    const expr = expectNoErrors("true(1)");
+    expect(expr.kind).toBe("Call");
+    if (expr.kind === "Call") expect(expr.name).toBe("true");
+  });
+
+  it("allows a provider function as the base of a traversal", () => {
+    const expr = expectNoErrors("provider::aws::arn_parse(x).account_id");
+    expect(expr.kind).toBe("Traversal");
+    if (expr.kind === "Traversal") expect(expr.source.kind).toBe("Call");
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Collections + for expressions
 // ─────────────────────────────────────────────────────────────────────────────

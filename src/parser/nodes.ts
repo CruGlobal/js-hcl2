@@ -73,6 +73,11 @@ export interface BlockLabelsNode extends NodeBase {
 }
 
 export interface LabelInfo {
+  /**
+   * The label as Terraform reads it. For a quoted label, escapes are
+   * applied (`"\u00e9"` gives `é`, `"$${x}"` gives `${x}`); the source
+   * text stays in the BlockLabels node's tokens.
+   */
   readonly value: string;
   readonly quoted: boolean;
 }
@@ -278,7 +283,17 @@ export interface SplatNode extends NodeBase {
 export interface FunctionCallNode extends NodeBase {
   readonly kind: "Call";
   readonly parts: ReadonlyArray<Token | ExprNode>;
+  /**
+   * The function name. For a provider-defined function it joins every
+   * segment with `::` and no spaces, as HCL does:
+   * `provider :: aws :: arn_parse(x)` has the name
+   * `"provider::aws::arn_parse"`.
+   */
   readonly name: string;
+  /**
+   * The name's first IDENT token. For a provider-defined function the
+   * other segments and the `::` tokens follow it in `parts`.
+   */
   readonly nameToken: Token;
   readonly args: ReadonlyArray<ExprNode>;
   readonly expandFinal: boolean;

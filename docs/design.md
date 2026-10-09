@@ -135,6 +135,10 @@ Design notes:
   `{ resource: { aws_s3_bucket: { a: {...}, b: {...} } } }`. When a block
   appears only once, it is still nested by label. This matches the
   convention used by `hcl2-json-parser` and Terraform's JSON output.
+- **Labels are decoded.** A quoted label is read the way Terraform reads
+  it, with its escapes applied: `b "\u00e9" {}` nests under `é`, and
+  `b "$${x}" {}` under `${x}`. `parse`, `Document.toValue()` and
+  `Document.get` all use the decoded text; the CST keeps the source.
 
 ### 3.2 `HCL.stringify(value, options?) => string`
 
@@ -264,7 +268,9 @@ Grouped to match the HCL2 spec:
   the reference scanner (and so Terraform) accepts it, for example
   `aws_route53_record._46fe` or `for _, v in xs`.
 - **Punctuation**: `LBRACE`, `RBRACE`, `LBRACK`, `RBRACK`, `LPAREN`,
-  `RPAREN`, `COMMA`, `DOT`, `ELLIPSIS`, `COLON`, `QUESTION`, `FATARROW`.
+  `RPAREN`, `COMMA`, `DOT`, `ELLIPSIS`, `COLON`, `DOUBLE_COLON` (`::`,
+  always one token, as in HCL's scanner; `:::` is `::` then `:`),
+  `QUESTION`, `FATARROW`.
 - **Operators**: `PLUS`, `MINUS`, `STAR`, `SLASH`, `PERCENT`, `EQ`, `NEQ`,
   `LT`, `LE`, `GT`, `GE`, `AND`, `OR`, `BANG`, `ASSIGN` (`=`).
 - **Template structure**: `OQUOTE`, `CQUOTE`, `QUOTED_LIT`, `TEMPLATE_INTERP`
@@ -289,7 +295,11 @@ The lexer tracks a stack of modes to handle context-sensitive tokens:
    or `\U` + 8 hex digits naming a Unicode character. Any other backslash
    sequence becomes an `INVALID` token, and the parser reports its error,
    matching Terraform's "Invalid escape sequence". Heredoc bodies treat `\`
-   as plain text.
+   as plain text. A raw line break (LF, CRLF or a lone CR) in quoted-string
+   text is an error too, as in Terraform ("Invalid multi-line string"):
+   each run of line breaks becomes one `INVALID` token and the string
+   continues after it. Heredoc bodies, and the insides of `${ }` and
+   `%{ }`, may span lines.
 3. `TEMPLATE_INTERP` — inside a `${ ... }`. Same as `NORMAL` but `}` pops
    back to `TEMPLATE`.
 4. `TEMPLATE_CONTROL` — inside a `%{ ... }`. Same as `NORMAL` plus the
@@ -355,10 +365,19 @@ Comparison := Additive  (("<"|"<="|">"|">=") Additive)*
 Additive   := Multiplicative (("+"|"-") Multiplicative)*
 Multiplicative := Unary (("*"|"/"|"%") Unary)*
 Unary      := ("-"|"!") Unary | Postfix
-Postfix    := Primary (GetAttr | Index | Splat | Call)*
+Postfix    := Primary (GetAttr | Index | Splat)*
 Primary    := Literal | CollectionCtor | TemplateExpr | ForExpr
-           |  IDENT | "(" Expression ")"
+           |  FunctionCall | IDENT | "(" Expression ")"
+FunctionCall := IDENT ("::" IDENT)* "(" Arguments? ")"
 ```
+
+An identifier followed by `(` or `::` always starts a call, even a
+keyword (`true(1)` is a call named `true`, as in HCL). The `::` form is a
+Terraform provider-defined function (`provider::aws::arn_parse(x)`); any
+number of segments is allowed, with spaces around `::`. Like Terraform,
+the parser reports "missing function name" when `::` is not followed by
+an identifier and "missing open parenthesis" when the name is not
+followed by `(`.
 
 ### 6.3 AST node shapes
 
@@ -371,6 +390,8 @@ type ExprNode =
   | VariableNode         // { kind: "variable", name: string }
   | TraversalNode        // { kind: "traversal", source: ExprNode, steps: Step[] }
   | FunctionCallNode     // { kind: "call", name: string, args: ExprNode[], expandFinal: boolean }
+                         //   name joins `::` segments ("provider::aws::arn_parse");
+                         //   nameToken is the first segment's token
   | ForNode              // tuple-for or object-for; see §6.4
   | ConditionalNode      // { kind: "conditional", cond, then, else }
   | BinaryOpNode         // { kind: "binary", op, left, right }
@@ -405,7 +426,9 @@ useful: the parse tree is complete, re-printable, and easy to reason about.
 ### 6.5 Error recovery
 
 In `bail: false` mode, the parser synchronizes on `NEWLINE` and block
-boundaries, records an `HCLParseError`, and continues. This powers
+boundaries, records an `HCLParseError`, and continues. The tokens it
+skips stay in the body's CST, and a `}` with no block to close is kept
+and stepped over, so recovery always moves forward. This powers
 editor-friendly use cases (LSP implementations, config validators) without
 requiring every downstream tool to tolerate exceptions.
 

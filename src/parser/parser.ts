@@ -9,11 +9,12 @@
  * holding a flat token run; M4 replaces the internal shape with a real
  * expression AST without changing the outer surface.
  *
- * Error recovery: on any parse error the parser records an
- * HCLParseError and resyncs to the next NEWLINE or closing brace at the
- * current depth. The erroneous tokens are wrapped in an ErrorNode so
- * the CST is always complete — round-trip works even on inputs that
- * contain errors.
+ * Error recovery: on a statement-level parse error the parser records
+ * an HCLParseError and resyncs to the next NEWLINE or closing brace at
+ * the current depth. The tokens it skips stay in the body's `parts`, so
+ * round-trip works even on inputs that contain errors, and a `}` with
+ * no block to close is kept and stepped over, so recovery always moves
+ * forward.
  */
 
 import { HCLParseError } from "../errors.js";
@@ -32,6 +33,7 @@ import type {
   Node,
 } from "./nodes.js";
 import { parseExpression as parseExpressionNode } from "./expr.js";
+import { unescapeTemplateLiteral } from "../value.js";
 
 export interface ParserOptions {
   /** Throw on the first error (true) or collect all errors (false). Default: true. */
@@ -142,14 +144,21 @@ export class Parser {
       }
 
       const stmt = this.parseStatement();
-      if (stmt) {
-        parts.push(stmt);
-        if (stmt.kind === "Attribute") attributes.push(stmt);
-        else blocks.push(stmt);
-      } else {
-        // parseStatement already emitted an error and recovered to the
-        // next NEWLINE / terminator. Continue the loop.
+      if (Array.isArray(stmt)) {
+        // parseStatement reported an error and skipped to the end of the
+        // line. Keep the skipped tokens so the CST stays lossless.
+        parts.push(...stmt);
+        if (stmt.length === 0) {
+          // Nothing was skipped: the token is a `}` with no block to
+          // close, where recovery stops. Keep it and step past it, or
+          // this loop never ends.
+          parts.push(this.consume());
+        }
+        continue;
       }
+      parts.push(stmt);
+      if (stmt.kind === "Attribute") attributes.push(stmt);
+      else blocks.push(stmt);
     }
 
     const endPos: Position =
@@ -167,17 +176,15 @@ export class Parser {
   }
 
   /**
-   * Parse one statement (Attribute or Block). Returns null if the
-   * statement could not be parsed; in that case `this.errors` has been
-   * appended to and the token cursor has been advanced past the bad
-   * region.
+   * Parse one statement (Attribute or Block). When the statement cannot
+   * be parsed, reports an error, skips to the end of the line and returns
+   * the skipped tokens (possibly none) for the caller to keep in the CST.
    */
-  private parseStatement(): AttributeNode | BlockNode | null {
+  private parseStatement(): AttributeNode | BlockNode | Token[] {
     const head = this.peek();
     if (head.kind !== TokenKind.IDENT) {
       this.errorAt(head.range, `expected an attribute or block, got ${head.kind}`);
-      this.recoverToLineEnd();
-      return null;
+      return this.recoverToLineEnd();
     }
 
     // Look at the token following the IDENT to disambiguate.
@@ -196,8 +203,7 @@ export class Parser {
       next.range,
       `expected '=' or a block header after identifier, got ${next.kind}`,
     );
-    this.recoverToLineEnd();
-    return null;
+    return this.recoverToLineEnd();
   }
 
   private parseAttribute(): AttributeNode {
@@ -280,8 +286,8 @@ export class Parser {
             inner.kind === TokenKind.QUOTED_LIT ||
             inner.kind === TokenKind.INVALID
           ) {
-            // INVALID here is a bad backslash escape: report it and keep
-            // its text so the label and the CST stay complete.
+            // INVALID here is a bad backslash escape or a raw line break:
+            // report it and keep its text so the CST stays complete.
             literalParts.push(inner.lexeme);
             parts.push(this.consume());
             if (inner.kind === TokenKind.INVALID) {
@@ -315,7 +321,12 @@ export class Parser {
           this.errorAt(inner.range, `unexpected ${inner.kind} inside block label`);
           break;
         }
-        labels.push({ value: literalParts.join(""), quoted: true });
+        // Store the label as Terraform reads it, with escapes applied.
+        // The tokens in `parts` keep the source text for printing.
+        labels.push({
+          value: unescapeTemplateLiteral(literalParts.join(""), false),
+          quoted: true,
+        });
         continue;
       }
       // Anything else in the label position is a structural error.
@@ -397,9 +408,11 @@ export class Parser {
    * skip tokens up to (but not including) the next NEWLINE, RBRACE, or
    * EOF at depth 0, while also respecting paren / bracket / brace
    * nesting so that we don't treat a RBRACE inside a struct literal as a
-   * resync point.
+   * resync point. Returns the skipped tokens so the caller can keep them
+   * in the CST.
    */
-  private recoverToLineEnd(): void {
+  private recoverToLineEnd(): Token[] {
+    const skipped: Token[] = [];
     let depth = 0;
     while (!this.atEnd()) {
       const tok = this.peek();
@@ -409,13 +422,14 @@ export class Parser {
           tok.kind === TokenKind.RBRACE ||
           tok.kind === TokenKind.EOF
         ) {
-          return;
+          break;
         }
       }
       if (OPENERS.has(tok.kind)) depth++;
       else if (CLOSERS.has(tok.kind) && depth > 0) depth--;
-      this.consume();
+      skipped.push(this.consume());
     }
+    return skipped;
   }
 }
 

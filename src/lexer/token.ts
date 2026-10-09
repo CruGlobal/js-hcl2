@@ -36,6 +36,8 @@ export const TokenKind = {
   DOT: "DOT",
   ELLIPSIS: "ELLIPSIS",
   COLON: "COLON",
+  /** `::` in a provider-defined function name (`provider::ns::fn`). */
+  DOUBLE_COLON: "DOUBLE_COLON",
   QUESTION: "QUESTION",
   FATARROW: "FATARROW",
 

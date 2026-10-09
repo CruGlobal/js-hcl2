@@ -48,6 +48,7 @@ import type {
   UnaryOpNode,
   VariableNode,
 } from "./nodes.js";
+import { isToken } from "./nodes.js";
 
 /**
  * Cursor + error-sink interface the expression parser needs. The outer
@@ -402,6 +403,13 @@ function parsePrimary(ctx: ExprCursor): ExprNode {
       return node;
     }
     case TokenKind.IDENT: {
+      // Function call? An identifier followed by `(`, or by `::` for a
+      // provider-defined function, starts a call. This comes before the
+      // keyword checks: HCL reads `true(1)` as a call too.
+      const after = ctx.peek(1).kind;
+      if (after === TokenKind.LPAREN || after === TokenKind.DOUBLE_COLON) {
+        return parseCall(ctx);
+      }
       const name = tok.lexeme;
       if (name === "true" || name === "false") {
         const t = ctx.consume();
@@ -424,10 +432,6 @@ function parsePrimary(ctx: ExprCursor): ExprNode {
           value: null,
         };
         return node;
-      }
-      // Function call? `name(...)` — trivia-insensitive peek for LPAREN.
-      if (ctx.peek(1).kind === TokenKind.LPAREN) {
-        return parseCall(ctx);
       }
       const t = ctx.consume();
       const node: VariableNode = {
@@ -454,11 +458,45 @@ function parsePrimary(ctx: ExprCursor): ExprNode {
   }
 }
 
-function parseCall(ctx: ExprCursor): FunctionCallNode {
+/**
+ * Parse a call: `name(args)`, or a provider-defined function call whose
+ * name has several segments joined by `::` (`provider::aws::arn_parse(x)`,
+ * spaces allowed around `::`). `name` joins the segments with `::` and no
+ * spaces, the way HCL names the function; `nameToken` is the first
+ * segment. A `::` with no name after it, or a name with no `(` after it,
+ * is an error (Terraform's "Missing function name" and "Missing open
+ * parenthesis"); the tokens read so far stay in an ErrorExpr node so the
+ * CST stays lossless.
+ */
+function parseCall(ctx: ExprCursor): FunctionCallNode | ErrorExprNode {
   const nameToken = ctx.consume(); // IDENT
+  const nameParts: Token[] = [nameToken];
+  let name = nameToken.lexeme;
+  while (ctx.peek().kind === TokenKind.DOUBLE_COLON) {
+    nameParts.push(ctx.consume());
+    const segment = ctx.peek();
+    if (segment.kind !== TokenKind.IDENT) {
+      return callNameError(
+        ctx,
+        nameParts,
+        segment,
+        "missing function name: '::' must be followed by a function name",
+      );
+    }
+    nameParts.push(ctx.consume());
+    name += "::" + segment.lexeme;
+  }
+  if (ctx.peek().kind !== TokenKind.LPAREN) {
+    return callNameError(
+      ctx,
+      nameParts,
+      ctx.peek(),
+      "missing open parenthesis: a function name must be followed by '(' to start the call",
+    );
+  }
   const lparen = ctx.consume(); // LPAREN
   const args: ExprNode[] = [];
-  const parts: Array<Token | ExprNode> = [nameToken, lparen];
+  const parts: Array<Token | ExprNode> = [...nameParts, lparen];
   let expandFinal = false;
   if (ctx.peek().kind !== TokenKind.RPAREN) {
     for (;;) {
@@ -486,12 +524,31 @@ function parseCall(ctx: ExprCursor): FunctionCallNode {
     kind: "Call",
     range: { start: nameToken.range.start, end: rparen.range.end },
     parts,
-    name: nameToken.lexeme,
+    name,
     nameToken,
     args,
     expandFinal,
   };
   return node;
+}
+
+/** Report a malformed call name at `at`, keeping the name tokens read so far. */
+function callNameError(
+  ctx: ExprCursor,
+  nameParts: Token[],
+  at: Token,
+  message: string,
+): ErrorExprNode {
+  ctx.errorAt(at.range, message);
+  return {
+    kind: "ErrorExpr",
+    range: {
+      start: nameParts[0]!.range.start,
+      end: nameParts[nameParts.length - 1]!.range.end,
+    },
+    parts: nameParts,
+    message,
+  };
 }
 
 function parseParens(ctx: ExprCursor): ParensNode {
@@ -824,10 +881,11 @@ function parseTemplateBody(
       templateParts.push(directive);
       continue;
     }
-    // Anything else inside a template body is a lexer bug or structural
-    // error — emit and try to make progress.
+    // Anything else inside a template body is a lexer bug or a structural
+    // error. Report it and step past it, keeping the token so the CST
+    // stays lossless.
     ctx.errorAt(tok.range, `unexpected ${tok.kind} in template body`);
-    ctx.consume();
+    parts.push(ctx.consume());
   }
 
   const closeToken = expectOrSynth(ctx, endKind, `expected ${endKind}`);
@@ -969,10 +1027,8 @@ function parseIfDirective(ctx: ExprCursor): TemplateIfDirectivePart {
     }
     // Otherwise: this is nested template content.
     const part = parseTemplateBodyPart(ctx);
-    if (part) {
-      doneParts.push(part);
-      ifParts.push(part);
-    }
+    if (!isToken(part)) doneParts.push(part);
+    ifParts.push(part);
   }
 
   const start = ifOpen.range.start;
@@ -1073,10 +1129,8 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
       }
     }
     const part = parseTemplateBodyPart(ctx);
-    if (part) {
-      bodyParts.push(part);
-      forParts.push(part);
-    }
+    if (!isToken(part)) bodyParts.push(part);
+    forParts.push(part);
   }
 
   const start = forOpen.range.start;
@@ -1101,9 +1155,10 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
 
 /**
  * Consume a run of literal text in a template body. Inside a template the
- * lexer emits INVALID only for a backslash escape HCL does not define:
- * report it, then keep its text as a literal part so the CST stays
- * complete and still prints back byte for byte.
+ * lexer emits INVALID only for a backslash escape HCL does not define or
+ * a raw line break in a quoted string: report it, then keep its text as a
+ * literal part so the CST stays complete and still prints back byte for
+ * byte.
  */
 function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   const strTok = ctx.consume();
@@ -1118,7 +1173,12 @@ function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   };
 }
 
-function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | null {
+/**
+ * Parse one part of a directive body. A token that cannot start a part is
+ * reported and returned as-is, so the caller keeps it in the directive's
+ * `parts` (lossless CST) but not in its list of template parts.
+ */
+function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | Token {
   const tok = ctx.peek();
   if (tok.kind === TokenKind.QUOTED_LIT || tok.kind === TokenKind.INVALID) {
     return parseStringPart(ctx);
@@ -1131,8 +1191,7 @@ function parseTemplateBodyPart(ctx: ExprCursor): TemplatePart | null {
   }
   // Unknown token inside a template body — consume to make progress.
   ctx.errorAt(tok.range, `unexpected ${tok.kind} in template body`);
-  ctx.consume();
-  return null;
+  return ctx.consume();
 }
 
 function parseGenericPercentDirective(ctx: ExprCursor): TemplateInterpolationPart {
