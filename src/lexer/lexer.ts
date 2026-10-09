@@ -67,6 +67,12 @@ const BACKSLASH = 0x5c;
 const DOLLAR = 0x24;
 const PERCENT = 0x25;
 const LBRACE = 0x7b;
+/**
+ * Bracket-stack entry for a `{` that opens a for expression. Unlike an
+ * object's `{`, it treats line breaks as whitespace, as hclsyntax does
+ * for the whole of a for expression.
+ */
+const FOR_BRACE = 0x1007b;
 const RBRACE = 0x7d;
 const TILDE = 0x7e;
 const LT = 0x3c;
@@ -100,10 +106,14 @@ export class Lexer {
     for (;;) {
       const token = this.nextToken();
       tokens.push(token);
+      this.previous = token;
       if (token.kind === TokenKind.EOF) break;
     }
     return tokens;
   }
+
+  /** The token before the one being scanned, if any. */
+  private previous: Token | null = null;
 
   private currentMode(): ModeFrame {
     return this.modes[this.modes.length - 1]!;
@@ -112,12 +122,12 @@ export class Lexer {
   private shouldSuppressNewlines(): boolean {
     const top = this.currentMode();
     // The innermost bracket opened in the current context decides: inside
-    // ( or [ newlines are insignificant, inside { they separate object
-    // items (as in an object literal in a call argument, or in `${ }`).
+    // ( or [ or a for expression's { newlines are insignificant, inside an
+    // object's { they separate items (as in an object literal in a call
+    // argument, or in `${ }`).
     if (this.brackets.length > (top.bracketBase ?? 0)) {
       const topBracket = this.brackets[this.brackets.length - 1]!;
-      // 0x28 '(' and 0x5b '[' suppress; 0x7b '{' does not.
-      return topBracket === 0x28 || topBracket === 0x5b;
+      return topBracket === 0x28 || topBracket === 0x5b || topBracket === FOR_BRACE;
     }
     // With no bracket of its own open, `${ }` and `%{ }` treat newlines as
     // whitespace; the top level keeps them as statement ends.
@@ -253,6 +263,69 @@ export class Lexer {
     return 0;
   }
 
+  /**
+   * True when the `{` at `pos` opens a for expression: the next tokens,
+   * past whitespace, line breaks and comments, are `for <name> [, <name>]
+   * in`. A `{` right after a block header (a name, or a quoted label) is a
+   * block body even if its first line reads that way; `in` and `if` are
+   * the names an expression `{` can follow.
+   */
+  private opensForExpression(): boolean {
+    const prev = this.previous;
+    if (prev?.kind === TokenKind.CQUOTE) return false;
+    if (prev?.kind === TokenKind.IDENT && prev.lexeme !== "in" && prev.lexeme !== "if") {
+      return false;
+    }
+    let i = this.skipBlank(this.pos + 1);
+    if (!this.isWordAt(i, "for")) return false;
+    i = this.skipBlank(i + 3);
+    i = this.skipIdent(i);
+    if (i < 0) return false;
+    i = this.skipBlank(i);
+    if (this.text.charCodeAt(i) === 0x2c /* , */) {
+      i = this.skipIdent(this.skipBlank(i + 1));
+      if (i < 0) return false;
+      i = this.skipBlank(i);
+    }
+    return this.isWordAt(i, "in");
+  }
+
+  /** Skip spaces, tabs, line breaks (LF, CRLF) and comments from `i`. */
+  private skipBlank(i: number): number {
+    for (;;) {
+      const c = this.text.charCodeAt(i);
+      if (c === SPACE || c === TAB) {
+        i++;
+      } else if (this.lineBreakWidth(i) > 0) {
+        i += this.lineBreakWidth(i);
+      } else if (c === HASH || (c === SLASH && this.text.charCodeAt(i + 1) === SLASH)) {
+        while (i < this.text.length && this.lineBreakWidth(i) === 0) i++;
+      } else if (c === SLASH && this.text.charCodeAt(i + 1) === STAR) {
+        const end = this.text.indexOf("*/", i + 2);
+        if (end === -1) return i;
+        i = end + 2;
+      } else {
+        return i;
+      }
+    }
+  }
+
+  /** True when the identifier `word`, and nothing longer, starts at `i`. */
+  private isWordAt(i: number, word: string): boolean {
+    return (
+      this.text.startsWith(word, i) && !isIdContinueCode(this.text, i + word.length)
+    );
+  }
+
+  /** The offset just past an identifier starting at `i`, or -1 if none does. */
+  private skipIdent(i: number): number {
+    if (!isIdStartCode(this.text, i)) return -1;
+    do {
+      i += (this.text.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
+    } while (i < this.text.length && isIdContinueCode(this.text, i));
+    return i;
+  }
+
   /** Advance past a `/* ... *\/` comment (callers check that it closes). */
   private skipBlockComment(): void {
     this.pos += 2; // consume opening `/*`
@@ -364,9 +437,10 @@ export class Lexer {
       if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
         mode.braceDepth--;
       }
-      // Pop the matching LBRACE off the bracket stack (pushed for
+      // Pop the matching `{` off the bracket stack (pushed for
       // newline-significance tracking above).
-      if (this.brackets[this.brackets.length - 1] === LBRACE) {
+      const top = this.brackets[this.brackets.length - 1];
+      if (top === LBRACE || top === FOR_BRACE) {
         this.popBracket();
       }
       this.pos++;
@@ -400,7 +474,8 @@ export class Lexer {
       // () or [] re-enters a newline-significant context (see
       // shouldSuppressNewlines). Block bodies also land here, which is
       // fine — the parser is already newline-tolerant in block bodies.
-      this.brackets.push(LBRACE);
+      // A `{` that opens a for expression is pushed as FOR_BRACE instead.
+      this.brackets.push(this.opensForExpression() ? FOR_BRACE : LBRACE);
       this.pos++;
       return { kind: TokenKind.LBRACE };
     }
