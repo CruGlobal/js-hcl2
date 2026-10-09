@@ -34,6 +34,7 @@ import type {
   ObjectItemNode,
   ObjectNode,
   ParensNode,
+  SplatItemNode,
   SplatNode,
   TemplateForDirectivePart,
   TemplateIfDirectivePart,
@@ -188,7 +189,11 @@ function parseUnary(ctx: ExprCursor): ExprNode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parsePostfix(ctx: ExprCursor): ExprNode {
-  let expr = parsePrimary(ctx);
+  return parseTraversals(ctx, parsePrimary(ctx));
+}
+
+/** Apply every `.` and `[` step that follows to `expr`. */
+function parseTraversals(ctx: ExprCursor, expr: ExprNode): ExprNode {
   for (;;) {
     const tok = ctx.peek();
     if (tok.kind === TokenKind.DOT) {
@@ -301,10 +306,11 @@ function parseAttrSplat(
 }
 
 /**
- * A full splat, `source[*].a[0].b`: any attribute and index steps (HCL
- * spec: `fullSplat = "[" "*" "]" (GetAttr | Index)*`). Another splat
- * (`.*` or `[*]`) ends the steps, and parsePostfix wraps this splat in
- * it, as the spec's `ExprTerm Splat` does.
+ * A full splat, `source[*].a[0].b`. As in hashicorp/hcl, it runs every
+ * later step on each element, later splats included. The attribute and
+ * index steps right after `[*]` go in `each`. If another splat (`.*` or
+ * `[*]`) follows, the rest of the chain, from that splat on, is parsed
+ * on a SplatItem that stands for each element and goes in `inner`.
  */
 function parseFullSplat(ctx: ExprCursor, source: ExprNode): SplatNode {
   const lbrackToken = ctx.consume();
@@ -329,7 +335,22 @@ function parseFullSplat(ctx: ExprCursor, source: ExprNode): SplatNode {
     }
     break;
   }
-  return makeSplat(source, parts, each, "full", rbrackToken);
+  const last = each.length > 0 ? each[each.length - 1]!.range.end : rbrackToken.range.end;
+  let inner: ExprNode | null = null;
+  const next = ctx.peek();
+  if (
+    (next.kind === TokenKind.DOT && ctx.peek(1).kind === TokenKind.STAR) ||
+    atFullSplat(ctx)
+  ) {
+    const item: SplatItemNode = {
+      kind: "SplatItem",
+      range: { start: last, end: last },
+      parts: [],
+    };
+    inner = parseTraversals(ctx, item);
+    parts.push(inner);
+  }
+  return makeSplat(source, parts, each, "full", rbrackToken, inner);
 }
 
 function makeSplat(
@@ -338,15 +359,18 @@ function makeSplat(
   each: TraversalStep[],
   style: SplatNode["style"],
   marker: Token,
+  inner: ExprNode | null = null,
 ): SplatNode {
   const last = each.length > 0 ? each[each.length - 1]! : null;
+  const end = inner ? inner.range.end : last ? last.range.end : marker.range.end;
   return {
     kind: "Splat",
-    range: { start: source.range.start, end: last ? last.range.end : marker.range.end },
+    range: { start: source.range.start, end },
     parts,
     source,
     style,
     each,
+    inner,
   };
 }
 

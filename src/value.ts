@@ -125,6 +125,7 @@ export function exprToValue(expr: ExprNode): Value {
     case "Variable":
     case "Traversal":
     case "Splat":
+    case "SplatItem":
     case "Call":
     case "For":
     case "Conditional":
@@ -246,6 +247,7 @@ function exprNodeKindToValueKind(k: ExprNodeKind): ExpressionValueKind {
     case "Traversal":
       return "traversal";
     case "Splat":
+    case "SplatItem": // only ever inside a splat
       return "splat";
     case "Call":
       return "function-call";

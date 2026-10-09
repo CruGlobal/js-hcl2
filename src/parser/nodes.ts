@@ -95,6 +95,7 @@ export type ExprNodeKind =
   | "Variable"
   | "Traversal"
   | "Splat"
+  | "SplatItem"
   | "Call"
   | "For"
   | "Conditional"
@@ -112,6 +113,7 @@ export type ExprNode =
   | VariableNode
   | TraversalNode
   | SplatNode
+  | SplatItemNode
   | FunctionCallNode
   | ForNode
   | ConditionalNode
@@ -265,11 +267,18 @@ export interface IndexStep {
 }
 
 /**
- * Attribute-only (`source.*.a.b`) or full (`source[*].a.b`) splat.
- * Steps after the splat marker are collected into `each`. As in the HCL
- * spec, an attribute-only splat's steps are GetAttr only (an index after
- * it applies to the splat's result), and a splat that follows a splat is
- * a new SplatNode whose `source` is the one before.
+ * Attribute-only (`source.*.a.b`) or full (`source[*].a.b`) splat, shaped
+ * the way hashicorp/hcl builds it.
+ *
+ * - An attribute-only splat takes attribute names only: its steps are in
+ *   `each`, and an index or another splat after it applies to its result
+ *   (`x.*.y[0]` is a Traversal over the Splat).
+ * - A full splat runs every later step on each element, later splats
+ *   included. `each` holds the attribute and index steps right after the
+ *   `[*]`. If another splat follows, `inner` is the rest of the chain, an
+ *   expression built on a SplatItemNode that stands for each element after
+ *   `each`: `x[*].y[*].z` is a splat over `x` with `each` = `.y` and
+ *   `inner` = the splat `<item>[*].z`.
  */
 export interface SplatNode extends NodeBase {
   readonly kind: "Splat";
@@ -277,6 +286,18 @@ export interface SplatNode extends NodeBase {
   readonly source: ExprNode;
   readonly style: "attr" | "full";
   readonly each: ReadonlyArray<TraversalStep>;
+  /** Full splats only: the rest of the chain after `each`, or null. */
+  readonly inner: ExprNode | null;
+}
+
+/**
+ * Stands for each element inside a full splat's `inner` chain: the value
+ * after the splat's `each` steps (hashicorp/hcl's AnonSymbolExpr). It
+ * has no tokens and no width.
+ */
+export interface SplatItemNode extends NodeBase {
+  readonly kind: "SplatItem";
+  readonly parts: readonly [];
 }
 
 /**
