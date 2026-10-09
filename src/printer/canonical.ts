@@ -16,16 +16,19 @@
  *   - Block list (2+ plain objects whose keys are all identifiers)   → repeated blocks
  *   - Any other plain object                                        → attribute
  *
- * A plain object can be written as blocks when it is a "label layer"
- * (see isLabelLayer) or when every key is a valid identifier, so each
- * key can be an attribute or block name inside the block body. An
- * object with a key that needs quotes (`"roles/viewer"`) and a value
- * that is not a block becomes an object-literal attribute instead.
+ * A plain object can be written as blocks when every one of its values
+ * can itself be written as blocks (its keys then become block labels),
+ * or when every key is a valid identifier, so each key can be an
+ * attribute or block name inside the block body. An object with a key
+ * that needs quotes (`"roles/viewer"`) and a value that is not a block
+ * becomes an object-literal attribute instead.
  *
- * Label peeling for blocks: if a block body is a label layer, each key
- * becomes an additional block label and the printer recurses into its
- * value. This reproduces Terraform's `resource "type" "name" {}` shape
- * from the corresponding nested Value.
+ * Label peeling: when every value of an object can be written as
+ * blocks, each key becomes one more block label and the printer
+ * recurses into its value. This reproduces Terraform's
+ * `resource "type" "name" {}` shape from the corresponding nested Value.
+ * A one-item list of objects is written as a tuple, because one block
+ * parses back as an object, so write a single block as an object.
  */
 
 import { isIdContinue, isIdStart } from "../unicode.js";

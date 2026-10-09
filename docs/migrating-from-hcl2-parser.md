@@ -90,6 +90,21 @@ parse('resource "t" "n" {}\nresource "t" "n" {}\n');
 If your downstream code unconditionally indexes `[0]` into single-block
 values, add a `Array.isArray` check at the boundary.
 
+For `stringify`, write a single block as an object, not a one-item
+array. One block parses back as an object, so `stringify` writes a
+one-item array of objects as a tuple attribute, and does not turn the
+key above it into a label:
+
+```ts
+stringify({ resource: { aws_instance: { web: { ami: "x" } } } });
+// → 'resource "aws_instance" "web" {\n  ami = "x"\n}\n'
+
+stringify({ resource: { aws_instance: { web: [{ ami: "x" }] } } });
+// → 'resource "aws_instance" {\n  web = [{ ami = "x" }]\n}\n'
+```
+
+Two or more objects in an array are still written as repeated blocks.
+
 ## 4. Emitting HCL (new capability)
 
 Neither `hcl2-parser` nor `hcl2-json-parser` emits HCL. If you were
