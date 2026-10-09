@@ -5,6 +5,13 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/CruGlobal/js-hcl2/compare/v0.1.5...v0.1.6) (2026-10-09)
+
+
+### Fixed
+
+* write quoted-key objects as attributes and keep one-item lists in stringify ([#75](https://github.com/CruGlobal/js-hcl2/issues/75)) ([58df8eb](https://github.com/CruGlobal/js-hcl2/commit/58df8eb886f35e433ccb7d9b456ed2cbba2d2801))
+
 ## [0.1.5](https://github.com/CruGlobal/js-hcl2/compare/v0.1.4...v0.1.5) (2026-10-09)
 
 
