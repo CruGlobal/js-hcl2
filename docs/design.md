@@ -607,11 +607,15 @@ Rules:
      including `""`.
    - **Block.** Otherwise, an object whose keys are all identifiers
      becomes a block, and each entry in it is chosen the same way.
-   - **Repeated blocks.** An array of objects whose keys are all
-     identifiers becomes one block per item, with the same name.
+   - **Repeated blocks.** An array of two or more objects whose keys are
+     all identifiers becomes one block per item, with the same type and
+     labels. An item's keys are never peeled into more labels: that would
+     group the blocks under those keys instead of into the list.
    - **Attribute.** Anything else is an attribute. A block body can only
      hold bare names, so an object with a key that needs quotes
-     (`"roles/viewer"`) is written as an object literal.
+     (`"roles/viewer"`) is written as an object literal. One block parses
+     as an object, not a one-item list, so a one-item array of objects is
+     written as a tuple.
 
 ### 8.1 Expression round-trip
 
@@ -635,7 +639,10 @@ multi-line expressions. This means
    - `parse(stringify(parse(f)))` is structurally equal to `parse(f)`.
    - `parseDocument(f).toString() === f` (byte equality).
 4. **Property-based tests** (`fast-check`) — generate random `Value`s and
-   assert `parse(stringify(v))` is structurally equal to `v`.
+   assert `parse(stringify(v))` is structurally equal to `v`. Also generate
+   random HCL text `t` (labels and keys that need quotes, repeated blocks)
+   and assert `parse(stringify(parse(t)))` is structurally equal to
+   `parse(t)`.
 5. **Browser smoke test** — one Playwright test that imports the ESM build
    in a headless Chromium page and parses a Terraform fixture.
 6. **Compatibility cross-check** — for a subset of the corpus, compare

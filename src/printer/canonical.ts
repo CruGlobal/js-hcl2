@@ -13,7 +13,7 @@
  * not parse back to the same Value:
  *   - Expression, primitive, or any array that is not a block list → attribute
  *   - Plain object that can be written as blocks                    → block(s)
- *   - Block list (plain objects whose keys are all identifiers)      → repeated blocks
+ *   - Block list (2+ plain objects whose keys are all identifiers)   → repeated blocks
  *   - Any other plain object                                        → attribute
  *
  * A plain object can be written as blocks when it is a "label layer"
@@ -161,8 +161,12 @@ function emitAsBlocks(
   out: string[],
 ): void {
   if (Array.isArray(value)) {
+    // Each item is one block with exactly these labels. Peeling an
+    // item's keys into more labels would group the blocks under those
+    // keys instead of collecting them into this list.
     for (const item of value) {
-      emitAsBlocks(type, labels, item as Value, depth, opts, out);
+      const body = item as Record<string, Value>;
+      emitBlockShell(type, labels, body, depth, opts, out);
     }
     return;
   }
@@ -465,15 +469,16 @@ function canEmitAsBlocks(value: Value): boolean {
 }
 
 /**
- * A list of blocks that share a type and labels: one or more plain
- * objects, each usable as a block body.
+ * A list of blocks that share a type and labels: two or more plain
+ * objects, each usable as a block body. One block parses as a plain
+ * object, never as a one-item list, so a one-item list stays a tuple.
  */
 function isBlockList(
   value: Value,
 ): value is ReadonlyArray<Record<string, Value>> {
   return (
     Array.isArray(value) &&
-    value.length > 0 &&
+    value.length > 1 &&
     value.every((item) => isPlainObject(item) && hasIdentifierKeys(item))
   );
 }
