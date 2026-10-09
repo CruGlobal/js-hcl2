@@ -65,6 +65,13 @@ describe("HCLParseError", () => {
 });
 
 describe("formatSnippet", () => {
+  it("shows a bare CR in the line as a space, so the line prints in one piece", () => {
+    const source = new SourceFile("a = 1\rb = 2\n");
+    const snippet = formatSnippet(source, rangeAt(source, 5, 6));
+    expect(snippet).not.toContain("\r");
+    expect(snippet.split("\n")).toEqual(["  1 | a = 1 b = 2", "    |      ^"]);
+  });
+
   it("renders a single-line range with carets under the offending text", () => {
     const source = new SourceFile("foo = bar baz\n");
     const snippet = formatSnippet(source, rangeAt(source, 10, 13));

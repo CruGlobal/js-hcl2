@@ -397,6 +397,13 @@ describe("a lone CR", () => {
     expect(() => parse(new SourceFile("a = 1\rb = 2\n"))).toThrow(/^invalid character/);
   });
 
+  it("does not count as a line in error positions, as in Terraform", () => {
+    const errors = errorsOf("/* x\r */\na = 1\na = 2\n");
+    expect(errors.map((e) => [e.line, e.column, e.message.split(";")[0]])).toEqual([
+      [3, 1, 'attribute redefined: the argument "a" was already set at line 2, column 1'],
+    ]);
+  });
+
   it("does not end a # comment, as in Terraform", () => {
     const { body } = parseOK("a = 1 # c\rb = 2\n");
     expect(body.attributes.map((a) => a.name)).toEqual(["a"]);

@@ -21,16 +21,18 @@ describe("SourceFile", () => {
       expect(f.lineStarts).toEqual([0, 3, 6]);
     });
 
-    it("treats bare CR as a line terminator", () => {
+    it("does not treat a bare CR as a line terminator, as HCL does not", () => {
       const f = new SourceFile("a\rb\rc");
-      expect(f.lineCount).toBe(3);
-      expect(f.lineStarts).toEqual([0, 2, 4]);
+      expect(f.lineCount).toBe(1);
+      expect(f.lineStarts).toEqual([0]);
+      expect(f.positionOf(4)).toEqual({ line: 1, column: 5, offset: 4 });
     });
 
     it("handles mixed line endings", () => {
       const f = new SourceFile("a\nb\r\nc\rd");
-      expect(f.lineCount).toBe(4);
-      expect(f.lineStarts).toEqual([0, 2, 5, 7]);
+      expect(f.lineCount).toBe(3);
+      expect(f.lineStarts).toEqual([0, 2, 5]);
+      expect(f.lineText(3)).toBe("c\rd");
     });
 
     it("records a virtual line start just past the end for a trailing newline", () => {
