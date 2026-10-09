@@ -251,7 +251,7 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Tuple and object literals (with trailing commas)       | ✅        |       |
 | Traversal (`.attr`, `[expr]`, legacy `.digit`)         | ✅        |       |
 | Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        |       |
-| Function calls (`f(a, b, c...)`)                       | ✅        |       |
+| Function calls (`f(a, b, c...)`)                       | ✅        | Includes provider-defined functions (`provider::aws::arn_parse(x)`); the call's `name` joins the segments with `::`. |
 | Unary `-` / `!`                                        | ✅        |       |
 | Binary `+ - * / % == != < <= > >= && \|\|`             | ✅        |       |
 | Conditional `cond ? then : else`                       | ✅        |       |

@@ -268,7 +268,9 @@ Grouped to match the HCL2 spec:
   the reference scanner (and so Terraform) accepts it, for example
   `aws_route53_record._46fe` or `for _, v in xs`.
 - **Punctuation**: `LBRACE`, `RBRACE`, `LBRACK`, `RBRACK`, `LPAREN`,
-  `RPAREN`, `COMMA`, `DOT`, `ELLIPSIS`, `COLON`, `QUESTION`, `FATARROW`.
+  `RPAREN`, `COMMA`, `DOT`, `ELLIPSIS`, `COLON`, `DOUBLE_COLON` (`::`,
+  always one token, as in HCL's scanner; `:::` is `::` then `:`),
+  `QUESTION`, `FATARROW`.
 - **Operators**: `PLUS`, `MINUS`, `STAR`, `SLASH`, `PERCENT`, `EQ`, `NEQ`,
   `LT`, `LE`, `GT`, `GE`, `AND`, `OR`, `BANG`, `ASSIGN` (`=`).
 - **Template structure**: `OQUOTE`, `CQUOTE`, `QUOTED_LIT`, `TEMPLATE_INTERP`
@@ -363,10 +365,19 @@ Comparison := Additive  (("<"|"<="|">"|">=") Additive)*
 Additive   := Multiplicative (("+"|"-") Multiplicative)*
 Multiplicative := Unary (("*"|"/"|"%") Unary)*
 Unary      := ("-"|"!") Unary | Postfix
-Postfix    := Primary (GetAttr | Index | Splat | Call)*
+Postfix    := Primary (GetAttr | Index | Splat)*
 Primary    := Literal | CollectionCtor | TemplateExpr | ForExpr
-           |  IDENT | "(" Expression ")"
+           |  FunctionCall | IDENT | "(" Expression ")"
+FunctionCall := IDENT ("::" IDENT)* "(" Arguments? ")"
 ```
+
+An identifier followed by `(` or `::` always starts a call, even a
+keyword (`true(1)` is a call named `true`, as in HCL). The `::` form is a
+Terraform provider-defined function (`provider::aws::arn_parse(x)`); any
+number of segments is allowed, with spaces around `::`. Like Terraform,
+the parser reports "missing function name" when `::` is not followed by
+an identifier and "missing open parenthesis" when the name is not
+followed by `(`.
 
 ### 6.3 AST node shapes
 
@@ -379,6 +390,8 @@ type ExprNode =
   | VariableNode         // { kind: "variable", name: string }
   | TraversalNode        // { kind: "traversal", source: ExprNode, steps: Step[] }
   | FunctionCallNode     // { kind: "call", name: string, args: ExprNode[], expandFinal: boolean }
+                         //   name joins `::` segments ("provider::aws::arn_parse");
+                         //   nameToken is the first segment's token
   | ForNode              // tuple-for or object-for; see §6.4
   | ConditionalNode      // { kind: "conditional", cond, then, else }
   | BinaryOpNode         // { kind: "binary", op, left, right }

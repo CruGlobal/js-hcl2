@@ -408,6 +408,10 @@ export class Lexer {
         this.pos++;
         return { kind: TokenKind.COMMA };
       case 0x3a /* : */:
+        if (this.text.charCodeAt(this.pos + 1) === 0x3a) {
+          this.pos += 2;
+          return { kind: TokenKind.DOUBLE_COLON };
+        }
         this.pos++;
         return { kind: TokenKind.COLON };
       case 0x3f /* ? */:
