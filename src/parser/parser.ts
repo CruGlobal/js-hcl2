@@ -140,6 +140,7 @@ export class Parser {
       parts: [],
       attributes: [],
       blocks: [],
+      firstByName: new Map(),
     };
   }
 
@@ -169,6 +170,7 @@ export class Parser {
       }
       this.addStatement(body, stmt);
       this.endStatement(body, stmt, terminator, errorsBefore);
+      this.checkRedefined(body, stmt);
     }
   }
 
@@ -176,6 +178,26 @@ export class Parser {
     body.parts.push(stmt);
     if (stmt.kind === "Attribute") body.attributes.push(stmt);
     else body.blocks.push(stmt);
+  }
+
+  /**
+   * Like Terraform (hclsyntax ParseBody), an argument may be set only
+   * once per body. Every repeat is reported at its name and points back
+   * to the first one.
+   */
+  private checkRedefined(body: BodyBuilder, stmt: AttributeNode | BlockNode): void {
+    if (stmt.kind !== "Attribute") return;
+    const first = body.firstByName.get(stmt.name);
+    if (first === undefined) {
+      body.firstByName.set(stmt.name, stmt);
+      return;
+    }
+    const at = first.parts[0].range.start;
+    this.errorAt(
+      stmt.parts[0].range,
+      `attribute redefined: the argument "${stmt.name}" was already set at ` +
+        `line ${at.line}, column ${at.column}; each argument may be set only once`,
+    );
   }
 
   /**
@@ -233,6 +255,7 @@ export class Parser {
         body.parts.push(...stmt);
       } else {
         this.addStatement(body, stmt);
+        this.checkRedefined(body, stmt);
         const end = this.peek();
         if (end.kind !== TokenKind.RBRACE && end.kind !== TokenKind.EOF) {
           if (this.errors.length === errorsBefore) {
@@ -526,6 +549,8 @@ interface BodyBuilder {
   readonly parts: (AttributeNode | BlockNode | Token)[];
   readonly attributes: AttributeNode[];
   readonly blocks: BlockNode[];
+  /** The first argument set under each name, for "attribute redefined". */
+  readonly firstByName: Map<string, AttributeNode>;
 }
 
 function finishBody(body: BodyBuilder): BodyNode {
