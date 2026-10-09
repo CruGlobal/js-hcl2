@@ -56,7 +56,9 @@ export class HCLParseError extends Error {
  */
 export function formatSnippet(source: SourceFile, range: Range): string {
   const { line, column } = range.start;
-  const lineText = source.lineText(line);
+  // A bare CR is part of its line (see SourceFile); show it as a space so
+  // a terminal does not jump back to the start of the line.
+  const lineText = source.lineText(line).replace(/\r/g, " ");
   const gutter = String(line).padStart(GUTTER_WIDTH, " ");
   const pad = " ".repeat(GUTTER_WIDTH);
 
