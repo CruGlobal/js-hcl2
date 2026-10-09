@@ -945,6 +945,14 @@ function parseControlDirective(ctx: ExprCursor): TemplatePart {
   const nameLookahead = peekDirectiveName(ctx);
   if (nameLookahead === "if") return parseIfDirective(ctx);
   if (nameLookahead === "for") return parseForDirective(ctx);
+  if (isClauseMarker(nameLookahead)) {
+    // An else / endif / endfor with no if or for open to take it.
+    ctx.errorAt(
+      openToken.range,
+      `unexpected ${nameLookahead} directive: the control directives in this template are unbalanced`,
+    );
+    return strayClauseMarker(parseClauseMarker(ctx));
+  }
   // Unknown — consume conservatively and emit error. A token the lexer
   // could not read (such as a misplaced `~`) reports its own error.
   const first = ctx.peek(ctx.peek(1).kind === TokenKind.TEMPLATE_STRIP ? 2 : 1);
@@ -956,6 +964,82 @@ function parseControlDirective(ctx: ExprCursor): TemplatePart {
   // Fall back to treating it as an interpolation-ish sequence so we make
   // progress: consume through the matching %-brace.
   return parseGenericPercentDirective(ctx);
+}
+
+/** The markers that continue or close an if / for directive. */
+function isClauseMarker(name: string | null): name is "else" | "endif" | "endfor" {
+  return name === "else" || name === "endif" || name === "endfor";
+}
+
+/** A `%{ [~] else|endif|endfor [~] }` marker, as consumed. */
+interface ClauseMarker {
+  readonly name: "else" | "endif" | "endfor";
+  readonly open: Token;
+  /** Every token of the marker, in source order. */
+  readonly tokens: Token[];
+  readonly nameToken: Token;
+  readonly stripLeft: boolean;
+  readonly stripRight: boolean;
+}
+
+/** Consume a clause marker; peekDirectiveName must have named one. */
+function parseClauseMarker(ctx: ExprCursor): ClauseMarker {
+  const open = ctx.consume(); // TEMPLATE_CONTROL
+  const tokens = [open];
+  let stripLeft = false;
+  if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
+    stripLeft = true;
+    tokens.push(ctx.consume());
+  }
+  const nameToken = ctx.consume(); // IDENT
+  tokens.push(nameToken);
+  const name = nameToken.lexeme as ClauseMarker["name"];
+  let stripRight = false;
+  if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
+    stripRight = true;
+    tokens.push(ctx.consume());
+  }
+  tokens.push(
+    expectOrSynth(ctx, TokenKind.TEMPLATE_SEQ_END, `expected '}' after ${name}`),
+  );
+  return { name, open, tokens, nameToken, stripLeft, stripRight };
+}
+
+/**
+ * Keep a clause marker that has no directive to belong to, as an
+ * interpolation-shaped part whose expression is an ErrorExpr holding the
+ * marker's name, so the CST stays lossless.
+ */
+function strayClauseMarker(marker: ClauseMarker): TemplateInterpolationPart {
+  const expr: ErrorExprNode = {
+    kind: "ErrorExpr",
+    range: marker.nameToken.range,
+    parts: [marker.nameToken],
+    message: `unexpected ${marker.name} directive`,
+  };
+  const last = marker.tokens[marker.tokens.length - 1]!;
+  return {
+    kind: "Interpolation",
+    range: { start: marker.open.range.start, end: last.range.end },
+    parts: marker.tokens.map((t) => (t === marker.nameToken ? expr : t)),
+    expr,
+    stripLeft: marker.stripLeft,
+    stripRight: marker.stripRight,
+  };
+}
+
+/**
+ * The token that ends the template a directive sits in: the closing
+ * quote or heredoc marker. A directive still open there is missing its
+ * end marker.
+ */
+function isTemplateEnd(tok: Token): boolean {
+  return tok.kind === TokenKind.CQUOTE || tok.kind === TokenKind.HEREDOC_END;
+}
+
+/** "line L, column C" for the start of `tok`, for messages. */
+function placeOf(tok: Token): string {
+  return `line ${tok.range.start.line}, column ${tok.range.start.column}`;
 }
 
 /** Peek the IDENT inside a `%{...}` without advancing the cursor. */
@@ -997,43 +1081,41 @@ function parseIfDirective(ctx: ExprCursor): TemplateIfDirectivePart {
   let stripRightEndif = false;
   let doneParts: TemplatePart[] = thenParts;
 
+  // As in hashicorp/hcl, the if ends at its endif, at a marker that
+  // cannot belong to it (reported, then consumed), or at the end of the
+  // template (reported, and left for the template to close).
   while (!ctx.atEnd()) {
     const tok = ctx.peek();
+    if (isTemplateEnd(tok)) {
+      ctx.errorAt(
+        tok.range,
+        `unexpected end of template: the if directive at ${placeOf(ifOpen)} is missing its endif directive`,
+      );
+      break;
+    }
     if (tok.kind === TokenKind.TEMPLATE_CONTROL) {
       const name = peekDirectiveName(ctx);
-      if (name === "else" || name === "endif") {
-        // Consume the %{ [~] (else|endif) [~] } sequence.
-        const open = ctx.consume();
-        ifParts.push(open);
-        let stripLeft = false;
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripLeft = true;
-          ifParts.push(ctx.consume());
-        }
-        const nameTok = ctx.consume();
-        ifParts.push(nameTok);
-        let stripRight = false;
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripRight = true;
-          ifParts.push(ctx.consume());
-        }
-        ifParts.push(
-          expectOrSynth(
-            ctx,
-            TokenKind.TEMPLATE_SEQ_END,
-            `expected '}' after ${name}`,
-          ),
-        );
-        if (name === "else") {
-          stripLeftElse = stripLeft;
-          stripRightElse = stripRight;
+      if (isClauseMarker(name)) {
+        const marker = parseClauseMarker(ctx);
+        ifParts.push(...marker.tokens);
+        if (name === "else" && elseParts === null) {
+          stripLeftElse = marker.stripLeft;
+          stripRightElse = marker.stripRight;
           elseParts = [];
           doneParts = elseParts;
           continue;
         }
-        // endif
-        stripLeftEndif = stripLeft;
-        stripRightEndif = stripRight;
+        if (name === "endif") {
+          stripLeftEndif = marker.stripLeft;
+          stripRightEndif = marker.stripRight;
+          break;
+        }
+        ctx.errorAt(
+          marker.open.range,
+          name === "else"
+            ? `unexpected else directive: the if directive at ${placeOf(ifOpen)} already has an else clause`
+            : `unexpected ${name} directive: expected an endif directive for the if at ${placeOf(ifOpen)}`,
+        );
         break;
       }
     }
@@ -1115,27 +1197,31 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
   let stripLeftEndfor = false;
   let stripRightEndfor = false;
 
+  // Ends like an if directive does (see parseIfDirective).
   while (!ctx.atEnd()) {
     const tok = ctx.peek();
+    if (isTemplateEnd(tok)) {
+      ctx.errorAt(
+        tok.range,
+        `unexpected end of template: the for directive at ${placeOf(forOpen)} is missing its endfor directive`,
+      );
+      break;
+    }
     if (tok.kind === TokenKind.TEMPLATE_CONTROL) {
-      if (peekDirectiveName(ctx) === "endfor") {
-        const open = ctx.consume();
-        forParts.push(open);
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripLeftEndfor = true;
-          forParts.push(ctx.consume());
+      const name = peekDirectiveName(ctx);
+      if (isClauseMarker(name)) {
+        const marker = parseClauseMarker(ctx);
+        forParts.push(...marker.tokens);
+        if (name === "endfor") {
+          stripLeftEndfor = marker.stripLeft;
+          stripRightEndfor = marker.stripRight;
+          break;
         }
-        forParts.push(ctx.consume()); // IDENT "endfor"
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripRightEndfor = true;
-          forParts.push(ctx.consume());
-        }
-        forParts.push(
-          expectOrSynth(
-            ctx,
-            TokenKind.TEMPLATE_SEQ_END,
-            "expected '}' after endfor",
-          ),
+        ctx.errorAt(
+          marker.open.range,
+          name === "else"
+            ? "unexpected else directive: a for directive cannot have an else clause"
+            : `unexpected ${name} directive: expected an endfor directive for the for at ${placeOf(forOpen)}`,
         );
         break;
       }
