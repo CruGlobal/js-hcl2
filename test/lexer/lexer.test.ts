@@ -656,6 +656,67 @@ describe("heredoc edge cases", () => {
   });
 });
 
+describe("a lone CR is not a line break", () => {
+  // hashicorp/hcl ends lines only at LF or CRLF. A CR on its own is
+  // "Invalid character" outside strings and comments.
+  function invalid(input: string): Array<[string, number]> {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.INVALID)
+      .map((t) => [t.lexeme, t.range.start.offset]);
+  }
+
+  it.each([
+    ["between arguments", "a = 1\rb = 2\n"],
+    ["at the start of the file", "\ra = 1\n"],
+    ["at the end of the file", "a = 1\r"],
+    ["before a CRLF", "a = 1\r\r\n"],
+    ["inside brackets", "a = [1,\r2]\n"],
+    ["inside parentheses", "a = (1\r+ 2)\n"],
+    ["inside an interpolation", 'a = "${x\r}"\n'],
+    ["inside a directive", 'a = "%{ if x\r}y%{ endif }"\n'],
+    ["in a heredoc body", "a = <<EOT\nx\ry\nEOT\n"],
+    ["in an indented heredoc body", "a = <<-EOT\n  x\r  y\n  EOT\n"],
+    ["just before a heredoc's closing marker", "a = <<EOT\nx\rEOT\n"],
+    ["after a heredoc's closing marker", "a = <<EOT\nx\nEOT\r"],
+  ])("emits one INVALID token %s", (_ctx, input) => {
+    expect(invalid(input)).toEqual([["\r", input.indexOf("\r")]]);
+    const bad = tokens(input).find((t) => t.kind === TokenKind.INVALID)!;
+    expect(bad.error).toMatch(/^invalid character/);
+    const newlines = tokens(input).filter((t) => t.kind === TokenKind.NEWLINE);
+    expect(newlines.map((t) => t.lexeme).filter((l) => l !== "\n" && l !== "\r\n")).toEqual([]);
+    expectRejoin(input);
+  });
+
+  it("does not open a heredoc when a lone CR follows the marker", () => {
+    expect(kindsOnly("a = <<EOT\rx\nEOT\n")).not.toContain(TokenKind.HEREDOC_BEGIN);
+  });
+
+  it("does not close a heredoc at a marker followed by a lone CR", () => {
+    expect(kindsOnly("a = <<EOT\nx\nEOT\r")).not.toContain(TokenKind.HEREDOC_END);
+  });
+
+  it.each([
+    ["a # comment", "# c\rb = 2\n"],
+    ["a // comment", "// c\rb = 2\n"],
+    ["a comment after an argument", "a = 1 # c\rb = 2\n"],
+  ])("keeps a lone CR inside %s, which runs on to the LF", (_ctx, input) => {
+    const idents = tokens(input).filter((t) => t.kind === TokenKind.IDENT);
+    expect(idents.map((t) => t.lexeme)).toEqual(input.startsWith("a") ? ["a"] : []);
+    expect(invalid(input)).toEqual([]);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["a /* */ comment", "/* a\rb */ x = 1\n"],
+    ["CRLF", "a = 1\r\nb = 2\r\n"],
+    ["CR before CRLF in trivia", "a = 1\n\r\n"],
+    ["a CRLF heredoc", "a = <<EOT\r\nx\r\nEOT\r\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expect(invalid(input)).toEqual([]);
+    expectRejoin(input);
+  });
+});
+
 describe("suppressed newlines inside interpolations", () => {
   it("treats newlines as whitespace inside ${...}", () => {
     const ts = tokens('"${\n  foo\n}"');

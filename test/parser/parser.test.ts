@@ -360,6 +360,67 @@ describe("each statement ends at a line break", () => {
   });
 });
 
+describe("a lone CR", () => {
+  // hashicorp/hcl ends lines only at LF or CRLF, and reports a CR on its
+  // own as "Invalid character" (inside a quoted string it is "Invalid
+  // multi-line string", covered below).
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["between arguments", "a = 1\rb = 2\n", 1, 6],
+    ["at the start of the file", "\ra = 1\n", 1, 1],
+    ["at the end of the file", "a = 1\r", 1, 6],
+    ["before a CRLF", "a = 1\r\r\n", 1, 6],
+    ["in a block", "b {\r}\n", 1, 4],
+    ["inside brackets", "a = [1,\r2]\n", 1, 8],
+    ["inside parentheses", "a = (1\r+ 2)\n", 1, 7],
+    ["inside an interpolation", 'a = "${x\r}"\n', 1, 9],
+    ["inside a directive", 'a = "%{ if x\r}y%{ endif }"\n', 1, 13],
+    ["in a heredoc body", "a = <<EOT\nx\ry\nEOT\n", 2, 2],
+    ["in an indented heredoc body", "a = <<-EOT\n  x\r  y\n  EOT\n", 2, 4],
+    ["just before a heredoc's closing marker", "a = <<EOT\nx\rEOT\n", 2, 2],
+    ["after a heredoc's closing marker", "a = <<EOT\nx\nEOT\r", 3, 4],
+  ])("reports it once as an invalid character: %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^invalid character/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(errors.filter((e) => /^invalid character/.test(e.message))).toHaveLength(1);
+  });
+
+  it("rejects a lone CR after a heredoc's opening marker", () => {
+    expect(errorsOf("a = <<EOT\rx\nEOT\n").length).toBeGreaterThan(0);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\rb = 2\n"))).toThrow(/^invalid character/);
+  });
+
+  it("does not end a # comment, as in Terraform", () => {
+    const { body } = parseOK("a = 1 # c\rb = 2\n");
+    expect(body.attributes.map((a) => a.name)).toEqual(["a"]);
+  });
+
+  it.each([
+    ["a // comment", "// c\rb = 2\n"],
+    ["a /* */ comment", "/* a\rb */ x = 1\n"],
+    ["CRLF", "a = 1\r\n"],
+    ["a blank CRLF line", "a = 1\n\r\n"],
+    ["a CRLF heredoc", "a = <<EOT\r\nx\r\nEOT\r\n"],
+  ])("accepts a CR in %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps parsing on the next line and stays lossless", () => {
+    const input = "a = 1\rb = 2\nc = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("an argument set twice in one body", () => {
   // hashicorp/hcl reports "Attribute redefined" while parsing a body
   // (hclsyntax ParseBody), so `terraform fmt` rejects it too.
