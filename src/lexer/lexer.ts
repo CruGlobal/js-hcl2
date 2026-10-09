@@ -177,6 +177,9 @@ export class Lexer {
           continue;
         }
         if (next === STAR) {
+          // An unterminated `/*` is not trivia: scanNormalLexeme turns it
+          // into an INVALID token so the parser reports it.
+          if (this.text.indexOf("*/", this.pos + 2) === -1) break;
           this.skipBlockComment();
           continue;
         }
@@ -236,7 +239,7 @@ export class Lexer {
     return 0;
   }
 
-  /** Advance past a `/* ... *\/` comment. If unterminated, consume to EOF. */
+  /** Advance past a `/* ... *\/` comment (callers check that it closes). */
   private skipBlockComment(): void {
     this.pos += 2; // consume opening `/*`
     while (this.pos < this.text.length) {
@@ -312,6 +315,12 @@ export class Lexer {
     if (c === CR) {
       this.pos++;
       return { kind: TokenKind.INVALID, error: LONE_CR };
+    }
+
+    // A `/*` with no `*/` after it (skipLeadingTrivia leaves only those).
+    if (c === SLASH && this.text.charCodeAt(this.pos + 1) === STAR) {
+      this.pos = this.text.length;
+      return { kind: TokenKind.INVALID, error: UNTERMINATED_COMMENT };
     }
 
     // String literal opener.
@@ -879,6 +888,9 @@ function isHexDigit(c: number): boolean {
 const LONE_CR =
   "invalid character: a carriage return (CR) on its own is not a line " +
   "break; end lines with LF or CRLF";
+
+const UNTERMINATED_COMMENT =
+  "unterminated comment: a /* comment must be closed with */";
 
 const MULTI_LINE_STRING =
   "invalid multi-line string: a quoted string cannot span lines; " +
