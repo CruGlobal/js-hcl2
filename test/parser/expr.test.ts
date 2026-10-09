@@ -3,6 +3,7 @@ import { lex } from "../../src/lexer/lexer.js";
 import { TokenKind } from "../../src/lexer/token.js";
 import type { Token } from "../../src/lexer/token.js";
 import { parse, parseExpr } from "../../src/parser/parser.js";
+import { parse as parseValue } from "../../src/index.js";
 import { print } from "../../src/parser/print.js";
 import { SourceFile } from "../../src/source.js";
 import type { ExprNode } from "../../src/parser/nodes.js";
@@ -272,10 +273,12 @@ describe("splats", () => {
 });
 
 describe("splat steps", () => {
-  // Accept/reject decisions match hashicorp/hcl v2.24.0. The node shapes
-  // follow the HCL spec grammar: `attrSplat = "." "*" GetAttr*`, so an
-  // index after `.*` applies to the splat's result, and a splat after a
-  // splat (`ExprTerm Splat`) wraps the one before it.
+  // Accept/reject decisions and node shapes match hashicorp/hcl v2.24.0.
+  // `.*` takes attribute names only, so an index after it applies to the
+  // splat's result. `[*]` runs every later step on each element, later
+  // splats included: `x[*].y[*].z` is one splat over `x` whose element
+  // chain is `.y[*].z`. `each` holds the plain steps right after `[*]`
+  // and `inner` the rest, built on a SplatItem (written `@` below).
   function errorsIn(input: string) {
     return parse(new SourceFile(input), { bail: false }).errors;
   }
@@ -285,8 +288,10 @@ describe("splat steps", () => {
     const step = (s: { kind: string; name?: string }) =>
       s.kind === "GetAttr" ? `.${s.name}` : "[i]";
     if (e.kind === "Splat") {
-      return `${e.style}(${shape(e.source)})<${e.each.map(step).join("")}>`;
+      const inner = e.inner ? `{${shape(e.inner)}}` : "";
+      return `${e.style}(${shape(e.source)})<${e.each.map(step).join("")}>${inner}`;
     }
+    if (e.kind === "SplatItem") return "@";
     if (e.kind === "Traversal") return `${shape(e.source)}${e.steps.map(step).join("")}`;
     if (e.kind === "Variable") return e.name;
     return e.kind;
@@ -319,14 +324,16 @@ describe("splat steps", () => {
   });
 
   it.each([
-    ["x[*].y[*].z", "full(full(x)<.y>)<.z>"],
-    ["x[*][*]", "full(full(x)<>)<>"],
-    ["x[*].y[0][*]", "full(full(x)<.y[i]>)<>"],
+    ["x[*].y[*].z", "full(x)<.y>{full(@)<.z>}"],
+    ["x[*][*]", "full(x)<>{full(@)<>}"],
+    ["x[*].y[0][*]", "full(x)<.y[i]>{full(@)<>}"],
+    ["x[*].y[*].z[*].w", "full(x)<.y>{full(@)<.z>{full(@)<.w>}}"],
     ["x.*[*]", "full(attr(x)<>)<>"],
     ["x.*.y[*]", "full(attr(x)<.y>)<>"],
-    ["x[*].*", "attr(full(x)<>)<>"],
-    ["x[*].*[*]", "full(attr(full(x)<>)<>)<>"],
-    ["x[*].y.*.z", "attr(full(x)<.y>)<.z>"],
+    ["x[*].*", "full(x)<>{attr(@)<>}"],
+    ["x[*].*[*]", "full(x)<>{full(attr(@)<>)<>}"],
+    ["x[*].y.*.z", "full(x)<.y>{attr(@)<.z>}"],
+    ["x[*].y.*.z[0]", "full(x)<.y>{attr(@)<.z>[i]}"],
     ["x.*.y[0]", "attr(x)<.y>[i]"],
     ["x.*.y[0].*", "attr(attr(x)<.y>[i])<>"],
     ["x.*[0].y", "attr(x)<>[i].y"],
@@ -337,6 +344,32 @@ describe("splat steps", () => {
   ])("accepts %s", (input, expected) => {
     expect(shape(expectNoErrors(input))).toBe(expected);
     expectRoundTripTokens(input);
+  });
+
+  it("gives a nested splat's element a zero-width SplatItem and the outer splat its full range", () => {
+    const expr = expectNoErrors("x[*].y[*].z");
+    if (expr.kind !== "Splat" || expr.inner === null) throw new Error("expected a nested splat");
+    expect(expr.source.kind).toBe("Variable");
+    expect([expr.range.start.offset, expr.range.end.offset]).toEqual([0, 11]);
+    const inner = expr.inner;
+    if (inner.kind !== "Splat") throw new Error("expected a splat");
+    expect(inner.source.kind).toBe("SplatItem");
+    expect(inner.source.parts).toEqual([]);
+    expect([inner.source.range.start.offset, inner.source.range.end.offset]).toEqual([6, 6]);
+    expect(print(expr)).toBe("x[*].y[*].z");
+  });
+
+  it("leaves inner null for a splat with no later splat", () => {
+    for (const input of ["x[*].y", "x.*.y", "x[*]"]) {
+      const expr = expectNoErrors(input);
+      expect(expr.kind === "Splat" && expr.inner).toBe(null);
+    }
+  });
+
+  it("reports the outer splat's kind through parse()", () => {
+    const value = parseValue("a = x[*].y[*].z\n") as unknown as { a: { kind: string; ast: ExprNode } };
+    expect(value.a.kind).toBe("splat");
+    expect(value.a.ast.kind === "Splat" && value.a.ast.source.kind).toBe("Variable");
   });
 });
 
