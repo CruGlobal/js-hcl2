@@ -593,13 +593,25 @@ Rules:
    one item per line with trailing commas.
 7. **Objects**: same wrapping rule as tuples. Keys that are valid HCL
    identifiers are emitted bare (`foo = 1`); keys that are not are emitted
-   as quoted strings (`"foo-bar" = 1`). HCL's `=` vs `:` ambiguity: the
-   printer always uses `=` for object literals, matching `terraform fmt`.
-8. **Block grouping**: when a JS object's value is itself an object with
-   non-identifier keys at the second level, the printer emits a nested
-   block. When the value is an array of objects (and the key names are
-   valid identifiers), it emits multiple blocks with the same name, matching
-   the parse-time grouping from §3.1.
+   as quoted strings (`"foo.bar" = 1`). `for` and `null` are quoted too:
+   `{ for = 1 }` starts a for expression and `{ null = 1 }` has a null
+   key. HCL's `=` vs `:` ambiguity: the printer always uses `=` for
+   object literals, matching `terraform fmt`.
+8. **Block grouping**: a `Value` does not record whether an object came
+   from a block or an attribute, so the printer picks a form that parses
+   back to the same value, preferring blocks (the inverse of the
+   parse-time grouping from §3.1):
+   - **Labels.** When every value of an object can itself be written as
+     blocks, each key becomes one more block label
+     (`resource "type" "name" {}`). Labels are quoted, so any key works,
+     including `""`.
+   - **Block.** Otherwise, an object whose keys are all identifiers
+     becomes a block, and each entry in it is chosen the same way.
+   - **Repeated blocks.** An array of objects whose keys are all
+     identifiers becomes one block per item, with the same name.
+   - **Attribute.** Anything else is an attribute. A block body can only
+     hold bare names, so an object with a key that needs quotes
+     (`"roles/viewer"`) is written as an object literal.
 
 ### 8.1 Expression round-trip
 
