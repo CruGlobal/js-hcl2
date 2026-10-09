@@ -245,6 +245,462 @@ describe("error recovery", () => {
   });
 });
 
+describe("each statement ends at a line break", () => {
+  // Every case and position here was checked against hashicorp/hcl v2.24.0
+  // (the version terraform 1.13 uses) and `terraform fmt`.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["two arguments", "a = 1 b = 2\n", 1, 7],
+    ["two arguments, no final newline", "a = 1 b = 2", 1, 7],
+    ["a stray '}' after an argument", "a = 1 }\n", 1, 7],
+    ["an argument that closes its block", "b {\n  a = 1 }\n", 2, 9],
+    ["two arguments in a block", "b {\n  a = 1 b = 2\n}\n", 2, 9],
+    ["a one-line comment between them", "a = 1 /* c */ b = 2\n", 1, 15],
+    ["a comment that hides the line break", "a = 1 /* multi\nline */ b = 2\n", 2, 9],
+  ])("rejects %s: missing newline after argument", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^missing newline after argument/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it.each([
+    ["an argument after a block", "b {} c = 1\n", 1, 6],
+    ["two blocks", "b {} c {}\n", 1, 6],
+    ["two one-line blocks", "b { a = 1 } c { d = 2 }\n", 1, 13],
+    ["an argument after a closing brace", "b {\n  a = 1\n} c = 1\n", 3, 3],
+    ["an argument after a nested block", "b {\n  c {} d = 1\n}\n", 2, 8],
+    ["a comment that hides the line break", "b {} /* x\ny */ c = 1\n", 2, 6],
+  ])("rejects %s: missing newline after block definition", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^missing newline after block definition/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it("rejects a comma between arguments", () => {
+    const errors = errorsOf("a = 1, b = 2\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^unexpected comma after argument/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([1, 6]);
+  });
+
+  it.each([
+    ["a second argument", "b { a = 1 b = 2 }\n", 1, 11, /^invalid single-argument block definition/],
+    ["a comma", "b { a = 1, b = 2 }\n", 1, 10, /^invalid single-argument block definition/],
+    ["a trailing comma", "b { a = 1 ,}\n", 1, 11, /^invalid single-argument block definition/],
+    ["a closing brace on the next line", "b { a = 1\n}\n", 1, 10, /^invalid single-argument block definition/],
+    ["a comment, then the brace on the next line", "b { a = 1 # c\n}\n", 1, 14, /^invalid single-argument block definition/],
+    ["a nested block", "b { c {} }\n", 1, 5, /^argument definition required/],
+    ["a nested block with a label", 'b { c "x" {} }\n', 1, 5, /^argument definition required/],
+  ])("rejects a one-line block with %s", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([expect.stringMatching(message)]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it("throws on the first error when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1 b = 2\n"))).toThrow(
+      /missing newline after argument/,
+    );
+  });
+
+  it.each([
+    ["an argument with no final newline", "a = 1"],
+    ["a block with no final newline", "b {}"],
+    ["a line comment", "a = 1 # c\nb = 2\n"],
+    ["a // comment", "a = 1 // c\nb = 2\n"],
+    ["a comment before the line break", "a = 1 /* c */\nb = 2\n"],
+    ["a multi-line comment, then a line break", "a = 1 /* multi\nline */\nb = 2\n"],
+    ["a comment after a block", "b {} /* x\ny */\n"],
+    ["CRLF line breaks", "a = 1\r\nb = 2\r\n"],
+    ["a one-line block", "b { a = 1 }\n"],
+    ["a one-line block with no spaces", "b {a=1}\n"],
+    ["an empty one-line block", "b { }\n"],
+    ["a one-line block and a comment", "b { a = 1 } # c\n"],
+    ["a comment before a one-line argument", "b { /* c */ a = 1 }\n"],
+    ["a comment after a one-line argument", "b { a = 1 /* c */ }\n"],
+    ["a comment after the opening brace", "b { # c\n  a = 1\n}\n"],
+    ["a multi-line object in a one-line block", "b { a = { x = 1\n} }\n"],
+    ["a multi-line list in a one-line block", "b { a = [1,\n2] }\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps parsing on the next line and stays lossless", () => {
+    const input = "a = 1 b = 2\nc = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it("lets a '}' after an argument still close its block", () => {
+    const input = "b {\n  a = 1 }\nc = 2\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.blocks[0]!.body.attributes.map((a) => a.name)).toEqual(["a"]);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["c"]);
+    expect(print(result.body)).toBe(input);
+  });
+
+  it("reads the rest of a one-line block that runs onto more lines", () => {
+    const input = "b { a = 1\n  c = 2\n}\nd = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.blocks[0]!.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["d"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
+describe("a lone CR", () => {
+  // hashicorp/hcl ends lines only at LF or CRLF, and reports a CR on its
+  // own as "Invalid character" (inside a quoted string it is "Invalid
+  // multi-line string", covered below).
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["between arguments", "a = 1\rb = 2\n", 1, 6],
+    ["at the start of the file", "\ra = 1\n", 1, 1],
+    ["at the end of the file", "a = 1\r", 1, 6],
+    ["before a CRLF", "a = 1\r\r\n", 1, 6],
+    ["in a block", "b {\r}\n", 1, 4],
+    ["inside brackets", "a = [1,\r2]\n", 1, 8],
+    ["inside parentheses", "a = (1\r+ 2)\n", 1, 7],
+    ["inside an interpolation", 'a = "${x\r}"\n', 1, 9],
+    ["inside a directive", 'a = "%{ if x\r}y%{ endif }"\n', 1, 13],
+    ["in a heredoc body", "a = <<EOT\nx\ry\nEOT\n", 2, 2],
+    ["in an indented heredoc body", "a = <<-EOT\n  x\r  y\n  EOT\n", 2, 4],
+    ["just before a heredoc's closing marker", "a = <<EOT\nx\rEOT\n", 2, 2],
+    ["after a heredoc's closing marker", "a = <<EOT\nx\nEOT\r", 3, 4],
+  ])("reports it once as an invalid character: %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^invalid character/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(errors.filter((e) => /^invalid character/.test(e.message))).toHaveLength(1);
+  });
+
+  it("rejects a lone CR after a heredoc's opening marker", () => {
+    expect(errorsOf("a = <<EOT\rx\nEOT\n").length).toBeGreaterThan(0);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\rb = 2\n"))).toThrow(/^invalid character/);
+  });
+
+  it("does not count as a line in error positions, as in Terraform", () => {
+    const errors = errorsOf("/* x\r */\na = 1\na = 2\n");
+    expect(errors.map((e) => [e.line, e.column, e.message.split(";")[0]])).toEqual([
+      [3, 1, 'attribute redefined: the argument "a" was already set at line 2, column 1'],
+    ]);
+  });
+
+  it("does not end a # comment, as in Terraform", () => {
+    const { body } = parseOK("a = 1 # c\rb = 2\n");
+    expect(body.attributes.map((a) => a.name)).toEqual(["a"]);
+  });
+
+  it.each([
+    ["a // comment", "// c\rb = 2\n"],
+    ["a /* */ comment", "/* a\rb */ x = 1\n"],
+    ["CRLF", "a = 1\r\n"],
+    ["a blank CRLF line", "a = 1\n\r\n"],
+    ["a CRLF heredoc", "a = <<EOT\r\nx\r\nEOT\r\n"],
+  ])("accepts a CR in %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps parsing on the next line and stays lossless", () => {
+    const input = "a = 1\rb = 2\nc = 3\n";
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(1);
+    expect(result.body.attributes.map((a) => a.name)).toEqual(["a", "c"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
+describe("template directives that do not balance", () => {
+  // Errors and positions from hashicorp/hcl (hclsyntax parser_template.go).
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  const missingEndif = (line: number, column: number) =>
+    `unexpected end of template: the if directive at line ${line}, column ${column} is missing its endif directive`;
+  const missingEndfor = (line: number, column: number) =>
+    `unexpected end of template: the for directive at line ${line}, column ${column} is missing its endfor directive`;
+
+  it.each([
+    ["an if at the closing quote", 'a = "%{ if x }in"\n', 1, 17, missingEndif(1, 6)],
+    ["an if with an else", 'a = "%{ if x }a%{ else }b"\n', 1, 26, missingEndif(1, 6)],
+    ["an empty if", 'a = "%{ if x }"\n', 1, 15, missingEndif(1, 6)],
+    ["the outer of two ifs", 'a = "%{ if x }%{ if y }a%{ endif }"\n', 1, 35, missingEndif(1, 6)],
+    ["an if before an interpolation", 'a = "%{ if x }${y}"\n', 1, 19, missingEndif(1, 6)],
+    ["a for", 'a = "%{ for v in vs }x"\n', 1, 23, missingEndfor(1, 6)],
+    ["an if in a heredoc", "a = <<EOT\n%{ if x }in\nEOT\n", 3, 1, missingEndif(2, 1)],
+  ])("stops %s at the end of the template", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([message]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it.each([
+    ["an endif with no if", 'a = "%{ endif }"\n', 1, 6, /^unexpected endif directive: the control directives in this template are unbalanced/],
+    ["an else with no if", 'a = "%{ else }"\n', 1, 6, /^unexpected else directive: the control directives in this template are unbalanced/],
+    ["an endfor with no for", 'a = "%{ endfor }"\n', 1, 6, /^unexpected endfor directive: the control directives in this template are unbalanced/],
+    ["a stripped endif with no if", 'a = "%{~ endif ~}"\n', 1, 6, /^unexpected endif directive/],
+    ["an endfor that closes an if", 'a = "%{ if x }%{ endfor }"\n', 1, 15, /^unexpected endfor directive: expected an endif directive for the if at line 1, column 6/],
+    ["an endif that closes a for", 'a = "%{ for v in vs }%{ endif }"\n', 1, 22, /^unexpected endif directive: expected an endfor directive for the for at line 1, column 6/],
+    ["an else in a for", 'a = "%{ for v in vs }%{ else }%{ endfor }"\n', 1, 22, /^unexpected else directive: a for directive cannot have an else clause/],
+    ["a second else", 'a = "%{ if x }%{ else }%{ else }%{ endif }"\n', 1, 24, /^unexpected else directive: the if directive at line 1, column 6 already has an else clause/],
+  ])("rejects %s", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(message);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile('a = "%{ if x }in"\n'))).toThrow(
+      /^unexpected end of template/,
+    );
+  });
+
+  it.each([
+    ["an if and an else", 'a = "%{ if x }a%{ else }b%{ endif }"\n'],
+    ["an if in a for", 'a = "%{ for v in vs }%{ if v }x%{ endif }%{ endfor }"\n'],
+    ["strip markers on every marker", 'a = "%{~ if x ~}a%{~ else ~}b%{~ endif ~}"\n'],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
+describe("line breaks inside a { for } expression", () => {
+  // hclsyntax ignores line breaks anywhere inside a for expression
+  // (finishParsingForExpr), even in an object `{ for ... }`, which is
+  // otherwise newline-sensitive. Each body below has a line break inside
+  // a value; Terraform accepts every one in every context.
+  const bodies = [
+    "{for k, v in x : k => v\n.arn}",
+    "{for k, v in x : k => v.a\n+ v.b}",
+    "{for k, v in x : k => v.a +\nv.b}",
+    "{for k, v in x : k => v if v.a\n&& v.b}",
+    "{for k, v in x : k => v if v.a &&\nv.b}",
+    "{for k, v in x : k => v\n? 1 : 2}",
+    "{for k, v in x : k => v ?\n1 : 2}",
+    "{for k, v in x : k => f(v)\n[0]}",
+    "{for k, v in x : k\n=> v}",
+    "{for k, v in x : k => v\nif v}",
+    "{for k, v in x : k => v\n}",
+    "{for k, v in x : k => v\n...}",
+    "{for k, v in x : k => {a = v\nb = 2}}",
+    "{\nfor k, v in x : k => v\n.arn}",
+    "{ # c\nfor k, v in x : k => v\n.arn}",
+    "{ /* c */ for k, v in x : k => v\n.arn}",
+    "{for k, v in x : k => [for w in v : w\n.y]}",
+    "{for k, v in x : k => v[*\n].y}",
+  ];
+  const contexts: Array<[string, (b: string) => string]> = [
+    ["at the top level", (b) => `a = ${b}\n`],
+    ["in ${ }", (b) => `a = "\${ ${b} }"\n`],
+    ["in a heredoc", (b) => `a = <<EOT\n\${jsonencode(${b})}\nEOT\n`],
+    ["in %{ for }", (b) => `a = "%{ for v in ${b} }x%{ endfor }"\n`],
+  ];
+
+  it.each(contexts.flatMap(([where, wrap]) => bodies.map((b) => [where, wrap(b)])))(
+    "accepts a line break inside a value %s: %j",
+    (_where, input) => {
+      expectRoundTrip(input);
+    },
+  );
+
+  it("still needs separators between the items of an object inside it", () => {
+    const errors = parse(new SourceFile("a = {for k in x : k => {y = 1 z = 2}}\n"), {
+      bail: false,
+    }).errors;
+    expect(errors[0]!.message).toMatch(/^expected ',' or newline between object items/);
+  });
+
+  it.each([
+    ["an argument named for", "b {\n  for = 1\n}\n"],
+    ["a block named for", "b {\n  for x in {\n  }\n}\n"],
+  ])("still reads a block body that starts with %s", (_ctx, input) => {
+    const { body } = parseOK(input);
+    expect(print(body)).toBe(input);
+    const inner = body.blocks[0]!.body;
+    expect([...inner.attributes, ...inner.blocks].map((s) => s.kind)).toEqual([
+      input.includes("=") ? "Attribute" : "Block",
+    ]);
+  });
+});
+
+describe("objects over several lines inside ${ } and %{ }", () => {
+  it.each([
+    ["in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
+    ["with a blank line", 'a = "${ {a = 1\n\nb = 2\n}.a }"\n'],
+    ["in %{ if }", 'a = "%{ if {a = 1\nb = 2}.a }x%{ endif }"\n'],
+    ["in a call", 'a = "${ f({a = 1\nb = 2}) }"\n'],
+    ["in a list", 'a = "${ [\n{a = 1\nb = 2}\n] }"\n'],
+    ["in a for expression", 'a = "${ [for k, v in {a = 1\nb = 2} : k] }"\n'],
+    ["in a heredoc", "a = <<EOT\n${ {a = 1\nb = 2}.a }\nEOT\n"],
+    ["as an object for", 'a = "${ {for k, v in m :\nk => v} }"\n'],
+  ])("accepts one %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("still needs a separator between items on one line", () => {
+    const errors = parse(new SourceFile('a = "${ {a = 1 b = 2}.a }"\n'), {
+      bail: false,
+    }).errors;
+    expect(errors[0]!.message).toMatch(/^expected ',' or newline between object items/);
+  });
+
+  it("reports only the unclosed '(' in ${ } inside an object", () => {
+    const input = 'a = { k = "${ (x }"\nj = 2 }\n';
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors.map((e) => e.message)).toEqual(["expected ')'"]);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
+describe("strip markers out of place", () => {
+  // hashicorp/hcl reports "Unsupported operator" for a `~` that does not
+  // touch the `${`, `%{` or closing `}`.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["in an endif", 'a = "%{ if x }a%{ endif~ }"\n', 1, 24],
+    ["in an else", 'a = "%{ if x }a%{ else~ }b%{ endif }"\n', 1, 23],
+    ["in an endfor", 'a = "%{ for v in vs }a%{ endfor~ }"\n', 1, 32],
+    ["after an if condition", 'a = "%{ if x~ }a%{ endif }"\n', 1, 13],
+    ["between spaces after an if condition", 'a = "%{ if x ~ }a%{ endif }"\n', 1, 14],
+    ["after a for collection", 'a = "%{ for v in vs~ }a%{ endfor }"\n', 1, 20],
+    ["before a directive keyword", 'a = "%{ ~if x }a%{ endif }"\n', 1, 9],
+    ["after an interpolated value", 'a = "${ x~ }"\n', 1, 10],
+    ["between spaces in an interpolation", 'a = "${ x ~ }"\n', 1, 11],
+    ["before an interpolated value", 'a = "${ ~x }"\n', 1, 9],
+    ["outside a template", "a = ~1\n", 1, 5],
+  ])("reports %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^unsupported operator/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it.each([
+    ["on both sides of an interpolation", 'a = "${~ x ~}"\n'],
+    ["with no spaces", 'a = "${~x~}"\n'],
+    ["on every if marker", 'a = "%{~ if x ~}a%{~ else ~}b%{~ endif ~}"\n'],
+    ["on every for marker", 'a = "%{~for v in vs~}a%{~endfor~}"\n'],
+    ["in a heredoc", "a = <<EOT\n%{~ if x ~}\na\n%{~ endif ~}\nEOT\n"],
+  ])("accepts strip markers %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
+describe("an unterminated /* comment", () => {
+  // hashicorp/hcl rejects these too (it reads the `/` and `*` as
+  // operators); the error here says what is wrong.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["alone", "/* abc", 1, 1],
+    ["only the opener", "/*", 1, 1],
+    ["after an argument", "a = 1 /* abc", 1, 7],
+    ["on its own line", "a = 1\n/* abc", 2, 1],
+    ["followed by a line break", "a = 1\n/*\n", 2, 1],
+    ["in a block", "b {\n/* x\n}\n", 2, 1],
+    ["in a list", "a = [1, /* x", 1, 9],
+  ])("reports it at the /*: %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^unterminated comment/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\n/* abc"))).toThrow(/^unterminated comment/);
+  });
+
+  it.each([
+    ["a closed comment at the end of the file", "a = 1 /* abc */"],
+    ["an empty comment", "/**/\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
+describe("an argument set twice in one body", () => {
+  // hashicorp/hcl reports "Attribute redefined" while parsing a body
+  // (hclsyntax ParseBody), so `terraform fmt` rejects it too.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it("reports the second one and says where the first one is", () => {
+    const errors = errorsOf("a = 1\na = 2\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      'attribute redefined: the argument "a" was already set at line 1, ' +
+        "column 1; each argument may be set only once",
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([2, 1]);
+  });
+
+  it("reports it inside a block", () => {
+    const errors = errorsOf("b {\n  a = 1\n  a = 2\n}\n");
+    expect(errors.map((e) => e.message)).toEqual([
+      expect.stringMatching(/^attribute redefined: the argument "a" was already set at line 2, column 3;/),
+    ]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([3, 3]);
+  });
+
+  it("reports every repeat against the first one", () => {
+    const errors = errorsOf("a = 1\na = 2\na = 3\n");
+    expect(errors.map((e) => [e.line, e.message.match(/line \d+/)![0]])).toEqual([
+      [2, "line 1"],
+      [3, "line 1"],
+    ]);
+  });
+
+  it("reports it after the line's own error", () => {
+    const errors = errorsOf("a = 1 b = 2\na = 3\n");
+    expect(errors.map((e) => e.message.split(":")[0])).toEqual([
+      "missing newline after argument",
+      "attribute redefined",
+    ]);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\na = 2\n"))).toThrow(
+      /^attribute redefined/,
+    );
+  });
+
+  it.each([
+    ["the same name in different bodies", "a = 1\nb {\n  a = 2\n}\n"],
+    ["two blocks of one type", "b {}\nb {}\n"],
+    ["two one-line blocks with the same argument", "b { a = 1 }\nb { a = 2 }\n"],
+    ["an argument and a block with one name", "a = 1\na {}\n"],
+    ["a repeated object key", "a = { x = 1, x = 2 }\n"],
+    ["names that differ only in case", "A = 1\na = 2\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
 describe("invalid escape sequences in quoted strings", () => {
   function errorsOf(input: string) {
     return parse(new SourceFile(input), { bail: false }).errors;

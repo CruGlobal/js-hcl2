@@ -62,6 +62,7 @@ export type {
   GetAttrStep,
   IndexStep,
   SplatNode,
+  SplatItemNode,
   FunctionCallNode,
   ForNode,
   ConditionalNode,

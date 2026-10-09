@@ -166,9 +166,9 @@ const ESCAPE_FRAGMENTS = [
   "\t",
 ];
 
-// Raw line breaks for the quoted-string variant only. HCL rejects each of
-// them inside a quoted string ("Invalid multi-line string"). They stay out
-// of heredoc bodies, where a lone CR is its own question.
+// Raw line breaks. HCL rejects each of them inside a quoted string
+// ("Invalid multi-line string"). A heredoc body may hold LF and CRLF, but
+// a lone CR is "Invalid character" there.
 const RAW_LINE_BREAKS = ["\n", "\r\n", "\r"];
 
 describe("property: escape handling agrees with hcl2-json-parser", () => {
@@ -177,7 +177,7 @@ describe("property: escape handling agrees with hcl2-json-parser", () => {
       .array(fc.constantFrom(...pool), { minLength: 1, maxLength: 8 })
       .map((parts) => parts.join(""));
   const quotedBody = fragments([...ESCAPE_FRAGMENTS, ...RAW_LINE_BREAKS]);
-  const heredocBody = fragments(ESCAPE_FRAGMENTS);
+  const heredocBody = fragments([...ESCAPE_FRAGMENTS, ...RAW_LINE_BREAKS]);
   const source = fc.oneof(
     quotedBody.map((b) => `a = "${b}"\n`),
     heredocBody.map((b) => `a = <<EOT\n${b}\nEOT\n`),

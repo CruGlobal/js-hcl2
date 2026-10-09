@@ -34,6 +34,7 @@ import type {
   ObjectItemNode,
   ObjectNode,
   ParensNode,
+  SplatItemNode,
   SplatNode,
   TemplateForDirectivePart,
   TemplateIfDirectivePart,
@@ -60,6 +61,12 @@ export interface ExprCursor {
   consume(): Token;
   atEnd(): boolean;
   errorAt(range: Range, message: string): void;
+  /**
+   * Report an error at `tok`. A token the lexer could not read (INVALID)
+   * reports its own message instead, such as "invalid character", and
+   * only once however many rules trip over it.
+   */
+  errorAtToken(tok: Token, message: string): void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +88,7 @@ function parseConditional(ctx: ExprCursor): ExprNode {
   const questionToken = ctx.consume();
   const then = parseExpression(ctx);
   if (ctx.peek().kind !== TokenKind.COLON) {
-    ctx.errorAt(ctx.peek().range, "expected ':' in conditional expression");
+    ctx.errorAtToken(ctx.peek(), "expected ':' in conditional expression");
     const node: ConditionalNode = {
       kind: "Conditional",
       range: { start: cond.range.start, end: then.range.end },
@@ -182,7 +189,11 @@ function parseUnary(ctx: ExprCursor): ExprNode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parsePostfix(ctx: ExprCursor): ExprNode {
-  let expr = parsePrimary(ctx);
+  return parseTraversals(ctx, parsePrimary(ctx));
+}
+
+/** Apply every `.` and `[` step that follows to `expr`. */
+function parseTraversals(ctx: ExprCursor, expr: ExprNode): ExprNode {
   for (;;) {
     const tok = ctx.peek();
     if (tok.kind === TokenKind.DOT) {
@@ -200,100 +211,69 @@ function parsePostfix(ctx: ExprCursor): ExprNode {
 
 function parseAfterDot(ctx: ExprCursor, source: ExprNode): ExprNode {
   const dotToken = ctx.consume(); // DOT
+  if (ctx.peek().kind === TokenKind.STAR) {
+    return parseAttrSplat(ctx, source, dotToken, ctx.consume());
+  }
+  return appendTraversalStep(source, parseNameAfterDot(ctx, dotToken));
+}
+
+/**
+ * The step after a `.`: an identifier, or a number for the legacy index
+ * form `a.0` (kept as a GetAttr whose name is the number; an evaluator
+ * reads it as an index). Anything else is Terraform's "invalid attribute
+ * name": the step gets an empty synthetic name, and the token is left
+ * for the caller, so it is never taken as a name (or, at the end of the
+ * file, put in the tree twice).
+ */
+function parseNameAfterDot(ctx: ExprCursor, dotToken: Token): GetAttrStep {
   const next = ctx.peek();
-
-  if (next.kind === TokenKind.STAR) {
-    // Attribute splat: source.*.a.b
-    const starToken = ctx.consume();
-    const each: TraversalStep[] = [];
-    const parts: Array<Token | ExprNode> = [source, dotToken, starToken];
-    while (true) {
-      const t = ctx.peek();
-      if (t.kind === TokenKind.DOT) {
-        const step = parseGetAttrStep(ctx);
-        each.push(step);
-        parts.push(step.dotToken, step.nameToken);
-        continue;
-      }
-      if (t.kind === TokenKind.LBRACK) {
-        const step = parseIndexStep(ctx);
-        each.push(step);
-        parts.push(step.lbrackToken, step.key, step.rbrackToken);
-        continue;
-      }
-      break;
-    }
-    const last = each.length > 0 ? each[each.length - 1]! : null;
-    const end = last
-      ? last.kind === "GetAttr"
-        ? last.nameToken.range.end
-        : last.rbrackToken.range.end
-      : starToken.range.end;
-    const node: SplatNode = {
-      kind: "Splat",
-      range: { start: source.range.start, end },
-      parts,
-      source,
-      style: "attr",
-      each,
-    };
-    return node;
-  }
-
-  if (next.kind === TokenKind.IDENT) {
-    // Regular get-attr.
-    return appendTraversalStep(source, parseGetAttrStepFromDot(ctx, dotToken));
-  }
-
-  if (next.kind === TokenKind.NUMBER) {
-    // Legacy integer traversal: a.0 — treated here as a synthetic GetAttr
-    // carrying the number token as the "name" for round-trip; semantic
-    // evaluation in M5+ will interpret it as an index.
+  if (next.kind === TokenKind.IDENT || next.kind === TokenKind.NUMBER) {
     const nameToken = ctx.consume();
-    const step: GetAttrStep = {
+    return {
       kind: "GetAttr",
       range: { start: dotToken.range.start, end: nameToken.range.end },
       dotToken,
       nameToken,
       name: nameToken.lexeme,
     };
-    return appendTraversalStep(source, step);
   }
-
-  ctx.errorAt(next.range, `expected identifier after '.', got ${next.kind}`);
-  // Recover: synthesize an empty GetAttr step.
+  ctx.errorAtToken(next, INVALID_ATTRIBUTE_NAME);
   const synth = syntheticToken(TokenKind.IDENT, dotToken.range.end);
-  const step: GetAttrStep = {
+  return {
     kind: "GetAttr",
     range: { start: dotToken.range.start, end: synth.range.end },
     dotToken,
     nameToken: synth,
     name: "",
   };
-  return appendTraversalStep(source, step);
-}
-
-function parseGetAttrStepFromDot(
-  ctx: ExprCursor,
-  dotToken: Token,
-): GetAttrStep {
-  const nameToken = ctx.consume(); // IDENT
-  return {
-    kind: "GetAttr",
-    range: { start: dotToken.range.start, end: nameToken.range.end },
-    dotToken,
-    nameToken,
-    name: nameToken.lexeme,
-  };
-}
-
-function parseGetAttrStep(ctx: ExprCursor): GetAttrStep {
-  const dotToken = ctx.consume(); // DOT
-  return parseGetAttrStepFromDot(ctx, dotToken);
 }
 
 function parseIndexStep(ctx: ExprCursor): IndexStep {
   const lbrackToken = ctx.consume(); // LBRACK
+  if (ctx.peek().kind === TokenKind.STAR) {
+    // `[*` not followed right away by `]` (a line break between them, for
+    // one): Terraform's "missing close bracket on splat index". The star
+    // is kept in an ErrorExpr key so the CST stays lossless.
+    const star = ctx.consume();
+    ctx.errorAtToken(ctx.peek(), SPLAT_NOT_CLOSED);
+    const key: ErrorExprNode = {
+      kind: "ErrorExpr",
+      range: star.range,
+      parts: [star],
+      message: SPLAT_NOT_CLOSED,
+    };
+    const rbrackToken =
+      ctx.peek().kind === TokenKind.RBRACK
+        ? ctx.consume()
+        : syntheticToken(TokenKind.RBRACK, star.range.end);
+    return {
+      kind: "Index",
+      range: { start: lbrackToken.range.start, end: rbrackToken.range.end },
+      lbrackToken,
+      key,
+      rbrackToken,
+    };
+  }
   const key = parseExpression(ctx);
   const rbrackToken = expectOrSynth(ctx, TokenKind.RBRACK, "expected ']'");
   return {
@@ -305,55 +285,117 @@ function parseIndexStep(ctx: ExprCursor): IndexStep {
   };
 }
 
+/** True when the next three tokens are `[ * ]`. */
+function atFullSplat(ctx: ExprCursor): boolean {
+  return (
+    ctx.peek().kind === TokenKind.LBRACK &&
+    ctx.peek(1).kind === TokenKind.STAR &&
+    ctx.peek(2).kind === TokenKind.RBRACK
+  );
+}
+
 function parseAfterLBrack(ctx: ExprCursor, source: ExprNode): ExprNode {
-  // Look ahead for full splat [*]
-  const first = ctx.peek(1);
-  const second = ctx.peek(2);
-  if (first.kind === TokenKind.STAR && second.kind === TokenKind.RBRACK) {
-    const lbrackToken = ctx.consume();
-    const starToken = ctx.consume();
-    const rbrackToken = ctx.consume();
-    const each: TraversalStep[] = [];
-    const parts: Array<Token | ExprNode> = [
-      source,
-      lbrackToken,
-      starToken,
-      rbrackToken,
-    ];
-    while (true) {
-      const t = ctx.peek();
-      if (t.kind === TokenKind.DOT) {
-        const step = parseGetAttrStep(ctx);
-        each.push(step);
-        parts.push(step.dotToken, step.nameToken);
-        continue;
-      }
-      if (t.kind === TokenKind.LBRACK) {
-        const step = parseIndexStep(ctx);
-        each.push(step);
-        parts.push(step.lbrackToken, step.key, step.rbrackToken);
-        continue;
-      }
-      break;
-    }
-    const last = each.length > 0 ? each[each.length - 1]! : null;
-    const end = last
-      ? last.kind === "GetAttr"
-        ? last.nameToken.range.end
-        : last.rbrackToken.range.end
-      : rbrackToken.range.end;
-    const node: SplatNode = {
-      kind: "Splat",
-      range: { start: source.range.start, end },
-      parts,
-      source,
-      style: "full",
-      each,
-    };
-    return node;
-  }
+  if (atFullSplat(ctx)) return parseFullSplat(ctx, source);
   // Regular index.
   return appendTraversalStep(source, parseIndexStep(ctx));
+}
+
+/**
+ * An attribute-only splat, `source.*.a.b`. As in the HCL spec
+ * (`attrSplat = "." "*" GetAttr*`) its steps are attribute names only:
+ * an index after it applies to the splat's result, so the steps stop at
+ * `[` and parsePostfix carries on from there. Another `.*` inside it is
+ * Terraform's "nested splat expression not allowed".
+ */
+function parseAttrSplat(
+  ctx: ExprCursor,
+  source: ExprNode,
+  dotToken: Token,
+  starToken: Token,
+): SplatNode {
+  const each: TraversalStep[] = [];
+  const parts: Array<Token | ExprNode> = [source, dotToken, starToken];
+  while (ctx.peek().kind === TokenKind.DOT) {
+    if (ctx.peek(1).kind === TokenKind.STAR) {
+      // Leave the `.*` for parsePostfix, which reads it as a new splat.
+      ctx.errorAtToken(ctx.peek(1), NESTED_SPLAT);
+      break;
+    }
+    const step = parseNameAfterDot(ctx, ctx.consume());
+    each.push(step);
+    parts.push(step.dotToken, step.nameToken);
+    if (step.name === "") break;
+  }
+  return makeSplat(source, parts, each, "attr", starToken);
+}
+
+/**
+ * A full splat, `source[*].a[0].b`. As in hashicorp/hcl, it runs every
+ * later step on each element, later splats included. The attribute and
+ * index steps right after `[*]` go in `each`. If another splat (`.*` or
+ * `[*]`) follows, the rest of the chain, from that splat on, is parsed
+ * on a SplatItem that stands for each element and goes in `inner`.
+ */
+function parseFullSplat(ctx: ExprCursor, source: ExprNode): SplatNode {
+  const lbrackToken = ctx.consume();
+  const starToken = ctx.consume();
+  const rbrackToken = ctx.consume();
+  const each: TraversalStep[] = [];
+  const parts: Array<Token | ExprNode> = [source, lbrackToken, starToken, rbrackToken];
+  for (;;) {
+    const t = ctx.peek();
+    if (t.kind === TokenKind.DOT && ctx.peek(1).kind !== TokenKind.STAR) {
+      const step = parseNameAfterDot(ctx, ctx.consume());
+      each.push(step);
+      parts.push(step.dotToken, step.nameToken);
+      if (step.name === "") break;
+      continue;
+    }
+    if (t.kind === TokenKind.LBRACK && !atFullSplat(ctx)) {
+      const step = parseIndexStep(ctx);
+      each.push(step);
+      parts.push(step.lbrackToken, step.key, step.rbrackToken);
+      continue;
+    }
+    break;
+  }
+  const last = each.length > 0 ? each[each.length - 1]!.range.end : rbrackToken.range.end;
+  let inner: ExprNode | null = null;
+  const next = ctx.peek();
+  if (
+    (next.kind === TokenKind.DOT && ctx.peek(1).kind === TokenKind.STAR) ||
+    atFullSplat(ctx)
+  ) {
+    const item: SplatItemNode = {
+      kind: "SplatItem",
+      range: { start: last, end: last },
+      parts: [],
+    };
+    inner = parseTraversals(ctx, item);
+    parts.push(inner);
+  }
+  return makeSplat(source, parts, each, "full", rbrackToken, inner);
+}
+
+function makeSplat(
+  source: ExprNode,
+  parts: Array<Token | ExprNode>,
+  each: TraversalStep[],
+  style: SplatNode["style"],
+  marker: Token,
+  inner: ExprNode | null = null,
+): SplatNode {
+  const last = each.length > 0 ? each[each.length - 1]! : null;
+  const end = inner ? inner.range.end : last ? last.range.end : marker.range.end;
+  return {
+    kind: "Splat",
+    range: { start: source.range.start, end },
+    parts,
+    source,
+    style,
+    each,
+    inner,
+  };
 }
 
 function appendTraversalStep(source: ExprNode, step: TraversalStep): TraversalNode {
@@ -453,7 +495,7 @@ function parsePrimary(ctx: ExprCursor): ExprNode {
     case TokenKind.LPAREN:
       return parseParens(ctx);
     default:
-      ctx.errorAt(tok.range, `expected expression, got ${tok.kind}`);
+      ctx.errorAtToken(tok, `expected expression, got ${tok.kind}`);
       return errorExpr(ctx, `expected expression, got ${tok.kind}`);
   }
 }
@@ -539,7 +581,7 @@ function callNameError(
   at: Token,
   message: string,
 ): ErrorExprNode {
-  ctx.errorAt(at.range, message);
+  ctx.errorAtToken(at, message);
   return {
     kind: "ErrorExpr",
     range: {
@@ -649,8 +691,8 @@ function parseObjectAfterLBrace(ctx: ExprCursor, lbrace: Token): ObjectNode {
     if (!sawSeparator) {
       // No separator and not at closing brace — syntactic error, but we
       // continue so the user sees all their errors at once.
-      ctx.errorAt(
-        ctx.peek().range,
+      ctx.errorAtToken(
+        ctx.peek(),
         `expected ',' or newline between object items, got ${ctx.peek().kind}`,
       );
       break;
@@ -673,7 +715,7 @@ function parseObjectItem(ctx: ExprCursor): ObjectItemNode {
   if (sepTok.kind === TokenKind.ASSIGN || sepTok.kind === TokenKind.COLON) {
     separatorToken = ctx.consume();
   } else {
-    ctx.errorAt(sepTok.range, "expected '=' or ':' in object item");
+    ctx.errorAtToken(sepTok, "expected '=' or ':' in object item");
     separatorToken = syntheticToken(TokenKind.ASSIGN, key.range.end);
   }
   const value = parseExpression(ctx);
@@ -732,7 +774,7 @@ function parseForExpression(
   if (inTok.kind === TokenKind.IDENT && inTok.lexeme === "in") {
     parts.push(ctx.consume());
   } else {
-    ctx.errorAt(inTok.range, "expected 'in' in for expression");
+    ctx.errorAtToken(inTok, "expected 'in' in for expression");
   }
 
   consumeNewlines(ctx, parts);
@@ -939,11 +981,101 @@ function parseControlDirective(ctx: ExprCursor): TemplatePart {
   const nameLookahead = peekDirectiveName(ctx);
   if (nameLookahead === "if") return parseIfDirective(ctx);
   if (nameLookahead === "for") return parseForDirective(ctx);
-  // Unknown — consume conservatively and emit error.
-  ctx.errorAt(openToken.range, `unknown template directive: %{${nameLookahead ?? "?"}}`);
+  if (isClauseMarker(nameLookahead)) {
+    // An else / endif / endfor with no if or for open to take it.
+    ctx.errorAt(
+      openToken.range,
+      `unexpected ${nameLookahead} directive: the control directives in this template are unbalanced`,
+    );
+    return strayClauseMarker(parseClauseMarker(ctx));
+  }
+  // Unknown — consume conservatively and emit error. A token the lexer
+  // could not read (such as a misplaced `~`) reports its own error.
+  const first = ctx.peek(ctx.peek(1).kind === TokenKind.TEMPLATE_STRIP ? 2 : 1);
+  if (first.kind === TokenKind.INVALID) {
+    ctx.errorAtToken(first, "unknown template directive");
+  } else {
+    ctx.errorAt(openToken.range, `unknown template directive: %{${nameLookahead ?? "?"}}`);
+  }
   // Fall back to treating it as an interpolation-ish sequence so we make
   // progress: consume through the matching %-brace.
   return parseGenericPercentDirective(ctx);
+}
+
+/** The markers that continue or close an if / for directive. */
+function isClauseMarker(name: string | null): name is "else" | "endif" | "endfor" {
+  return name === "else" || name === "endif" || name === "endfor";
+}
+
+/** A `%{ [~] else|endif|endfor [~] }` marker, as consumed. */
+interface ClauseMarker {
+  readonly name: "else" | "endif" | "endfor";
+  readonly open: Token;
+  /** Every token of the marker, in source order. */
+  readonly tokens: Token[];
+  readonly nameToken: Token;
+  readonly stripLeft: boolean;
+  readonly stripRight: boolean;
+}
+
+/** Consume a clause marker; peekDirectiveName must have named one. */
+function parseClauseMarker(ctx: ExprCursor): ClauseMarker {
+  const open = ctx.consume(); // TEMPLATE_CONTROL
+  const tokens = [open];
+  let stripLeft = false;
+  if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
+    stripLeft = true;
+    tokens.push(ctx.consume());
+  }
+  const nameToken = ctx.consume(); // IDENT
+  tokens.push(nameToken);
+  const name = nameToken.lexeme as ClauseMarker["name"];
+  let stripRight = false;
+  if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
+    stripRight = true;
+    tokens.push(ctx.consume());
+  }
+  tokens.push(
+    expectOrSynth(ctx, TokenKind.TEMPLATE_SEQ_END, `expected '}' after ${name}`),
+  );
+  return { name, open, tokens, nameToken, stripLeft, stripRight };
+}
+
+/**
+ * Keep a clause marker that has no directive to belong to, as an
+ * interpolation-shaped part whose expression is an ErrorExpr holding the
+ * marker's name, so the CST stays lossless.
+ */
+function strayClauseMarker(marker: ClauseMarker): TemplateInterpolationPart {
+  const expr: ErrorExprNode = {
+    kind: "ErrorExpr",
+    range: marker.nameToken.range,
+    parts: [marker.nameToken],
+    message: `unexpected ${marker.name} directive`,
+  };
+  const last = marker.tokens[marker.tokens.length - 1]!;
+  return {
+    kind: "Interpolation",
+    range: { start: marker.open.range.start, end: last.range.end },
+    parts: marker.tokens.map((t) => (t === marker.nameToken ? expr : t)),
+    expr,
+    stripLeft: marker.stripLeft,
+    stripRight: marker.stripRight,
+  };
+}
+
+/**
+ * The token that ends the template a directive sits in: the closing
+ * quote or heredoc marker. A directive still open there is missing its
+ * end marker.
+ */
+function isTemplateEnd(tok: Token): boolean {
+  return tok.kind === TokenKind.CQUOTE || tok.kind === TokenKind.HEREDOC_END;
+}
+
+/** "line L, column C" for the start of `tok`, for messages. */
+function placeOf(tok: Token): string {
+  return `line ${tok.range.start.line}, column ${tok.range.start.column}`;
 }
 
 /** Peek the IDENT inside a `%{...}` without advancing the cursor. */
@@ -985,43 +1117,41 @@ function parseIfDirective(ctx: ExprCursor): TemplateIfDirectivePart {
   let stripRightEndif = false;
   let doneParts: TemplatePart[] = thenParts;
 
+  // As in hashicorp/hcl, the if ends at its endif, at a marker that
+  // cannot belong to it (reported, then consumed), or at the end of the
+  // template (reported, and left for the template to close).
   while (!ctx.atEnd()) {
     const tok = ctx.peek();
+    if (isTemplateEnd(tok)) {
+      ctx.errorAt(
+        tok.range,
+        `unexpected end of template: the if directive at ${placeOf(ifOpen)} is missing its endif directive`,
+      );
+      break;
+    }
     if (tok.kind === TokenKind.TEMPLATE_CONTROL) {
       const name = peekDirectiveName(ctx);
-      if (name === "else" || name === "endif") {
-        // Consume the %{ [~] (else|endif) [~] } sequence.
-        const open = ctx.consume();
-        ifParts.push(open);
-        let stripLeft = false;
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripLeft = true;
-          ifParts.push(ctx.consume());
-        }
-        const nameTok = ctx.consume();
-        ifParts.push(nameTok);
-        let stripRight = false;
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripRight = true;
-          ifParts.push(ctx.consume());
-        }
-        ifParts.push(
-          expectOrSynth(
-            ctx,
-            TokenKind.TEMPLATE_SEQ_END,
-            `expected '}' after ${name}`,
-          ),
-        );
-        if (name === "else") {
-          stripLeftElse = stripLeft;
-          stripRightElse = stripRight;
+      if (isClauseMarker(name)) {
+        const marker = parseClauseMarker(ctx);
+        ifParts.push(...marker.tokens);
+        if (name === "else" && elseParts === null) {
+          stripLeftElse = marker.stripLeft;
+          stripRightElse = marker.stripRight;
           elseParts = [];
           doneParts = elseParts;
           continue;
         }
-        // endif
-        stripLeftEndif = stripLeft;
-        stripRightEndif = stripRight;
+        if (name === "endif") {
+          stripLeftEndif = marker.stripLeft;
+          stripRightEndif = marker.stripRight;
+          break;
+        }
+        ctx.errorAt(
+          marker.open.range,
+          name === "else"
+            ? `unexpected else directive: the if directive at ${placeOf(ifOpen)} already has an else clause`
+            : `unexpected ${name} directive: expected an endif directive for the if at ${placeOf(ifOpen)}`,
+        );
         break;
       }
     }
@@ -1086,7 +1216,7 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
   if (inTok.kind === TokenKind.IDENT && inTok.lexeme === "in") {
     forParts.push(ctx.consume());
   } else {
-    ctx.errorAt(inTok.range, "expected 'in' in template for directive");
+    ctx.errorAtToken(inTok, "expected 'in' in template for directive");
   }
   const collection = parseExpression(ctx);
   forParts.push(collection);
@@ -1103,27 +1233,31 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
   let stripLeftEndfor = false;
   let stripRightEndfor = false;
 
+  // Ends like an if directive does (see parseIfDirective).
   while (!ctx.atEnd()) {
     const tok = ctx.peek();
+    if (isTemplateEnd(tok)) {
+      ctx.errorAt(
+        tok.range,
+        `unexpected end of template: the for directive at ${placeOf(forOpen)} is missing its endfor directive`,
+      );
+      break;
+    }
     if (tok.kind === TokenKind.TEMPLATE_CONTROL) {
-      if (peekDirectiveName(ctx) === "endfor") {
-        const open = ctx.consume();
-        forParts.push(open);
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripLeftEndfor = true;
-          forParts.push(ctx.consume());
+      const name = peekDirectiveName(ctx);
+      if (isClauseMarker(name)) {
+        const marker = parseClauseMarker(ctx);
+        forParts.push(...marker.tokens);
+        if (name === "endfor") {
+          stripLeftEndfor = marker.stripLeft;
+          stripRightEndfor = marker.stripRight;
+          break;
         }
-        forParts.push(ctx.consume()); // IDENT "endfor"
-        if (ctx.peek().kind === TokenKind.TEMPLATE_STRIP) {
-          stripRightEndfor = true;
-          forParts.push(ctx.consume());
-        }
-        forParts.push(
-          expectOrSynth(
-            ctx,
-            TokenKind.TEMPLATE_SEQ_END,
-            "expected '}' after endfor",
-          ),
+        ctx.errorAt(
+          marker.open.range,
+          name === "else"
+            ? "unexpected else directive: a for directive cannot have an else clause"
+            : `unexpected ${name} directive: expected an endfor directive for the for at ${placeOf(forOpen)}`,
         );
         break;
       }
@@ -1163,7 +1297,7 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
 function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   const strTok = ctx.consume();
   if (strTok.kind === TokenKind.INVALID) {
-    ctx.errorAt(strTok.range, strTok.error ?? "invalid template text");
+    ctx.errorAtToken(strTok, "invalid template text");
   }
   return {
     kind: "StringPart",
@@ -1279,7 +1413,7 @@ function expectOrSynth(
 ): Token {
   const tok = ctx.peek();
   if (tok.kind === kind) return ctx.consume();
-  ctx.errorAt(tok.range, message);
+  ctx.errorAtToken(tok, message);
   return syntheticToken(kind, tok.range.start);
 }
 
@@ -1310,6 +1444,17 @@ function partEnd(
   // Every Token and node type exposes `range.end`.
   return part.range.end;
 }
+
+const INVALID_ATTRIBUTE_NAME =
+  "invalid attribute name: an attribute name is required after a dot";
+
+const SPLAT_NOT_CLOSED =
+  "missing close bracket on splat index: the * of a full splat must be " +
+  "followed right away by ]";
+
+const NESTED_SPLAT =
+  "nested splat expression not allowed: a splat (*) cannot be used inside " +
+  "an attribute-only splat (.*)";
 
 // Avoid unused-import complaints if HCLParseError's side-effects are
 // needed in future expansions.

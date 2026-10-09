@@ -656,12 +656,203 @@ describe("heredoc edge cases", () => {
   });
 });
 
+describe("a lone CR is not a line break", () => {
+  // hashicorp/hcl ends lines only at LF or CRLF. A CR on its own is
+  // "Invalid character" outside strings and comments.
+  function invalid(input: string): Array<[string, number]> {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.INVALID)
+      .map((t) => [t.lexeme, t.range.start.offset]);
+  }
+
+  it.each([
+    ["between arguments", "a = 1\rb = 2\n"],
+    ["at the start of the file", "\ra = 1\n"],
+    ["at the end of the file", "a = 1\r"],
+    ["before a CRLF", "a = 1\r\r\n"],
+    ["inside brackets", "a = [1,\r2]\n"],
+    ["inside parentheses", "a = (1\r+ 2)\n"],
+    ["inside an interpolation", 'a = "${x\r}"\n'],
+    ["inside a directive", 'a = "%{ if x\r}y%{ endif }"\n'],
+    ["in a heredoc body", "a = <<EOT\nx\ry\nEOT\n"],
+    ["in an indented heredoc body", "a = <<-EOT\n  x\r  y\n  EOT\n"],
+    ["just before a heredoc's closing marker", "a = <<EOT\nx\rEOT\n"],
+    ["after a heredoc's closing marker", "a = <<EOT\nx\nEOT\r"],
+  ])("emits one INVALID token %s", (_ctx, input) => {
+    expect(invalid(input)).toEqual([["\r", input.indexOf("\r")]]);
+    const bad = tokens(input).find((t) => t.kind === TokenKind.INVALID)!;
+    expect(bad.error).toMatch(/^invalid character/);
+    const newlines = tokens(input).filter((t) => t.kind === TokenKind.NEWLINE);
+    expect(newlines.map((t) => t.lexeme).filter((l) => l !== "\n" && l !== "\r\n")).toEqual([]);
+    expectRejoin(input);
+  });
+
+  it("does not open a heredoc when a lone CR follows the marker", () => {
+    expect(kindsOnly("a = <<EOT\rx\nEOT\n")).not.toContain(TokenKind.HEREDOC_BEGIN);
+  });
+
+  it("does not close a heredoc at a marker followed by a lone CR", () => {
+    expect(kindsOnly("a = <<EOT\nx\nEOT\r")).not.toContain(TokenKind.HEREDOC_END);
+  });
+
+  it.each([
+    ["a # comment", "# c\rb = 2\n"],
+    ["a // comment", "// c\rb = 2\n"],
+    ["a comment after an argument", "a = 1 # c\rb = 2\n"],
+  ])("keeps a lone CR inside %s, which runs on to the LF", (_ctx, input) => {
+    const idents = tokens(input).filter((t) => t.kind === TokenKind.IDENT);
+    expect(idents.map((t) => t.lexeme)).toEqual(input.startsWith("a") ? ["a"] : []);
+    expect(invalid(input)).toEqual([]);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["a /* */ comment", "/* a\rb */ x = 1\n"],
+    ["CRLF", "a = 1\r\nb = 2\r\n"],
+    ["CR before CRLF in trivia", "a = 1\n\r\n"],
+    ["a CRLF heredoc", "a = <<EOT\r\nx\r\nEOT\r\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expect(invalid(input)).toEqual([]);
+    expectRejoin(input);
+  });
+});
+
+describe("strip markers", () => {
+  // hashicorp/hcl reads `~` as a strip marker only right after `${` or
+  // `%{`, or right before a `}`. Anywhere else it is the bitwise NOT
+  // operator, which HCL does not support.
+  function marks(input: string): Array<[TokenKind, string]> {
+    return tokens(input)
+      .filter((t) => t.lexeme === "~")
+      .map((t) => [t.kind, t.lexeme]);
+  }
+
+  it.each([
+    ["after ${", 'a = "${~ x}"'],
+    ["before } in ${ }", 'a = "${x~}"'],
+    ["before } after a space", 'a = "${x ~}"'],
+    ["after %{", 'a = "%{~if x}a%{ endif }"'],
+    ["before } in an endif", 'a = "%{ if x }a%{ endif ~}"'],
+  ])("emits TEMPLATE_STRIP %s", (_ctx, input) => {
+    expect(marks(input)).toEqual([[TokenKind.TEMPLATE_STRIP, "~"]]);
+  });
+
+  it.each([
+    ["after a space in ${", 'a = "${ ~x }"'],
+    ["before a space in ${", 'a = "${ x~ }"'],
+    ["between spaces", 'a = "${ x ~ }"'],
+    ["after a space in %{", 'a = "%{ ~if x }a%{ endif }"'],
+    ["before a space in an endif", 'a = "%{ if x }a%{ endif~ }"'],
+    ["outside a template", "a = ~1"],
+  ])("emits INVALID %s", (_ctx, input) => {
+    expect(marks(input)).toEqual([[TokenKind.INVALID, "~"]]);
+    const bad = tokens(input).find((t) => t.kind === TokenKind.INVALID)!;
+    expect(bad.error).toMatch(/^unsupported operator/);
+    expectRejoin(input);
+  });
+});
+
+describe("an unterminated /* comment", () => {
+  it.each([
+    ["alone", "/* abc", "/* abc"],
+    ["only the opener", "/*", "/*"],
+    ["after an argument", "a = 1 /* abc", "/* abc"],
+    ["on its own line", "a = 1\n/* abc\n", "/* abc\n"],
+    ["inside an interpolation", 'a = "${ x /* }"\n', '/* }"\n'],
+  ])("becomes one INVALID token to the end of the file: %s", (_ctx, input, lexeme) => {
+    const bad = tokens(input).filter((t) => t.kind === TokenKind.INVALID);
+    expect(bad.map((t) => t.lexeme)).toEqual([lexeme]);
+    expect(bad[0]!.error).toMatch(/^unterminated comment/);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["a closed comment", "a = 1 /* abc */"],
+    ["an empty comment", "/**/"],
+    ["a comment over two lines", "a = 1 /* x\ny */\n"],
+  ])("leaves %s as trivia", (_ctx, input) => {
+    expect(kindsOnly(input)).not.toContain(TokenKind.INVALID);
+    expectRejoin(input);
+  });
+});
+
 describe("suppressed newlines inside interpolations", () => {
   it("treats newlines as whitespace inside ${...}", () => {
     const ts = tokens('"${\n  foo\n}"');
     const kinds = ts.map((t) => t.kind);
     expect(kinds).not.toContain(TokenKind.NEWLINE);
     expectRejoin('"${\n  foo\n}"');
+  });
+
+  // Inside `${ }` and `%{ }` newlines are whitespace, but inside an
+  // object `{ }` nested in one they separate items again, as in
+  // hashicorp/hcl. Brackets opened inside a sequence belong to it.
+  function newlineOffsets(input: string): number[] {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.NEWLINE)
+      .map((t) => t.range.start.offset);
+  }
+
+  it.each([
+    ["an object in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
+    ["an object in %{ }", 'a = "%{ if {a = 1\nb = 2}.a }x%{ endif }"\n'],
+    ["an object in a call in ${ }", 'a = "${ f({a = 1\nb = 2}) }"\n'],
+    ["an object in a for in ${ }", 'a = "${ [for k, v in {a = 1\nb = 2} : k] }"\n'],
+    ["an object in a heredoc's ${ }", "a = <<EOT\n${ {a = 1\nb = 2}.a }\nEOT\n"],
+  ])("emits a NEWLINE between the items of %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.indexOf("1\nb") + 1, input.length - 1]);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["inside ${ } in an object", 'a = { k = "${\nx\n}" }\n'],
+    ["inside a list in ${ }", 'a = "${ [\n1,\n2] }"\n'],
+  ])("keeps newlines as whitespace %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+  });
+
+  it("does not let a '(' left open in ${ } hide the newline after the string", () => {
+    const input = 'a = { k = "${ (x }"\nj = 2 }\n';
+    expect(newlineOffsets(input)).toEqual([input.indexOf("\nj"), input.length - 1]);
+  });
+
+  it("does not let an extra ')' in ${ } close a '[' outside it", () => {
+    const input = 'a = ["${ x) }",\n2]\n';
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+  });
+});
+
+describe("newlines inside a { for } expression", () => {
+  // A `{` that opens a for expression treats line breaks as whitespace,
+  // like `(` and `[`; an object `{ }` inside it separates items again.
+  function newlineOffsets(input: string): number[] {
+    return tokens(input)
+      .filter((t) => t.kind === TokenKind.NEWLINE)
+      .map((t) => t.range.start.offset);
+  }
+
+  it.each([
+    ["at the top level", "a = {for k, v in x : k => v\n.arn}\n"],
+    ["after a comment", "a = { # c\nfor k, v in x : k => v\n.arn}\n"],
+    ["with no spaces", "a = {for k,v in x:k=>v\n.arn}\n"],
+    ["in ${ }", 'a = "${ {for k, v in x : k => v\n.arn} }"\n'],
+    ["after in", 'a = "%{ for v in {for k, v in x : k => v\n.y} }x%{ endfor }"\n'],
+  ])("keeps line breaks as whitespace %s", (_ctx, input) => {
+    expect(newlineOffsets(input)).toEqual([input.length - 1]);
+    expectRejoin(input);
+  });
+
+  it("emits NEWLINE between the items of an object inside it", () => {
+    const input = "a = {for k in x : k => {y = 1\nz = 2}}\n";
+    expect(newlineOffsets(input)).toEqual([input.indexOf("1\nz") + 1, input.length - 1]);
+  });
+
+  it.each([
+    ["an object", "a = {\nk = 1\n}\n", 3],
+    ["a block body starting with an argument named for", "b {\nfor = 1\n}\n", 3],
+    ["a block body starting with a block named for", "b {\nfor x in {\n}\n}\n", 4],
+  ])("keeps NEWLINE tokens in %s", (_ctx, input, count) => {
+    expect(newlineOffsets(input)).toHaveLength(count);
   });
 });
 

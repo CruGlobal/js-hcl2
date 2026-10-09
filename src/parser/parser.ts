@@ -99,6 +99,8 @@ export class Parser {
   private readonly tokens: readonly Token[];
   private readonly bail: boolean;
   private readonly errors: HCLParseError[] = [];
+  /** INVALID tokens already reported by `errorAtToken`. */
+  private readonly reportedInvalid = new Set<Token>();
   private pos = 0;
 
   constructor(source: SourceFile, options: ParserOptions = {}) {
@@ -129,50 +131,153 @@ export class Parser {
    * terminator itself — the caller handles that.
    */
   private parseBody(terminator: TokenKind | null): BodyNode {
-    const parts: (AttributeNode | BlockNode | Token)[] = [];
-    const attributes: AttributeNode[] = [];
-    const blocks: BlockNode[] = [];
-    const startPos: Position = this.peek().range.start;
+    const body = this.startBody();
+    this.parseBodyItems(body, terminator);
+    return finishBody(body);
+  }
 
+  private startBody(): BodyBuilder {
+    return {
+      start: this.peek().range.start,
+      parts: [],
+      attributes: [],
+      blocks: [],
+      firstByName: new Map(),
+    };
+  }
+
+  /** Parse statements into `body` until `terminator` or EOF. */
+  private parseBodyItems(body: BodyBuilder, terminator: TokenKind | null): void {
     while (!this.atEnd()) {
       const tok = this.peek();
-      if (tok.kind === TokenKind.EOF) break;
       if (terminator !== null && tok.kind === terminator) break;
       if (tok.kind === TokenKind.NEWLINE) {
-        parts.push(this.consume());
+        body.parts.push(this.consume());
         continue;
       }
 
+      const errorsBefore = this.errors.length;
       const stmt = this.parseStatement();
       if (Array.isArray(stmt)) {
         // parseStatement reported an error and skipped to the end of the
         // line. Keep the skipped tokens so the CST stays lossless.
-        parts.push(...stmt);
+        body.parts.push(...stmt);
         if (stmt.length === 0) {
           // Nothing was skipped: the token is a `}` with no block to
           // close, where recovery stops. Keep it and step past it, or
           // this loop never ends.
-          parts.push(this.consume());
+          body.parts.push(this.consume());
         }
         continue;
       }
-      parts.push(stmt);
-      if (stmt.kind === "Attribute") attributes.push(stmt);
-      else blocks.push(stmt);
+      this.addStatement(body, stmt);
+      this.endStatement(body, stmt, terminator, errorsBefore);
+      this.checkRedefined(body, stmt);
     }
+  }
 
-    const endPos: Position =
-      parts.length > 0
-        ? endOfPart(parts[parts.length - 1]!)
-        : startPos;
+  private addStatement(body: BodyBuilder, stmt: AttributeNode | BlockNode): void {
+    body.parts.push(stmt);
+    if (stmt.kind === "Attribute") body.attributes.push(stmt);
+    else body.blocks.push(stmt);
+  }
 
-    return {
-      kind: "Body",
-      range: { start: startPos, end: endPos },
-      parts,
-      attributes,
-      blocks,
-    };
+  /**
+   * Like Terraform (hclsyntax ParseBody), an argument may be set only
+   * once per body. Every repeat is reported at its name and points back
+   * to the first one.
+   */
+  private checkRedefined(body: BodyBuilder, stmt: AttributeNode | BlockNode): void {
+    if (stmt.kind !== "Attribute") return;
+    const first = body.firstByName.get(stmt.name);
+    if (first === undefined) {
+      body.firstByName.set(stmt.name, stmt);
+      return;
+    }
+    const at = first.parts[0].range.start;
+    this.errorAt(
+      stmt.parts[0].range,
+      `attribute redefined: the argument "${stmt.name}" was already set at ` +
+        `line ${at.line}, column ${at.column}; each argument may be set only once`,
+    );
+  }
+
+  /**
+   * Like Terraform, an argument or block must end at a line break or at
+   * the end of the file: `a = 1 b = 2` is an error. The body loop
+   * consumes the line break itself. If the statement already reported an
+   * error, the cursor can be anywhere on the line, so the rest of the
+   * line is skipped without a second error.
+   */
+  private endStatement(
+    body: BodyBuilder,
+    stmt: AttributeNode | BlockNode,
+    terminator: TokenKind | null,
+    errorsBefore: number,
+  ): void {
+    const end = this.peek();
+    if (end.kind === TokenKind.NEWLINE || end.kind === TokenKind.EOF) return;
+    if (this.errors.length === errorsBefore) {
+      let message = MISSING_NEWLINE_AFTER_ARGUMENT;
+      if (stmt.kind === "Block") message = MISSING_NEWLINE_AFTER_BLOCK;
+      else if (end.kind === TokenKind.COMMA) message = COMMA_AFTER_ARGUMENT;
+      this.errorAtToken(end, message);
+    }
+    // A `}` that closes the enclosing block is left for that block. At
+    // the top level there is no block to close, so it is skipped too.
+    body.parts.push(...this.recoverToLineEnd(terminator === TokenKind.RBRACE));
+  }
+
+  /**
+   * The body of a block whose first argument sits on the same line as
+   * its `{`, like `b { a = 1 }`. As in Terraform, it holds exactly one
+   * argument (no nested block) and must close on that line. If the line
+   * ends before the `}`, the error is reported and the rest of the block
+   * is read as an ordinary multi-line body.
+   */
+  private parseOneLineBody(): BodyNode {
+    const body = this.startBody();
+    const errorsBefore = this.errors.length;
+    const head = this.peek();
+    const next = this.peek(1);
+    if (
+      head.kind === TokenKind.IDENT &&
+      (next.kind === TokenKind.IDENT ||
+        next.kind === TokenKind.OQUOTE ||
+        next.kind === TokenKind.LBRACE)
+    ) {
+      this.errorAt(
+        { start: head.range.start, end: next.range.end },
+        nestedBlockInOneLineBlock(head.lexeme),
+      );
+      body.parts.push(...this.recoverToLineEnd());
+    } else {
+      const stmt = this.parseStatement();
+      if (Array.isArray(stmt)) {
+        body.parts.push(...stmt);
+      } else {
+        this.addStatement(body, stmt);
+        this.checkRedefined(body, stmt);
+        const end = this.peek();
+        if (end.kind !== TokenKind.RBRACE && end.kind !== TokenKind.EOF) {
+          if (this.errors.length === errorsBefore) {
+            this.errorAtToken(
+              end,
+              end.kind === TokenKind.COMMA
+                ? ONE_LINE_BLOCK_COMMA
+                : end.kind === TokenKind.NEWLINE
+                  ? ONE_LINE_BLOCK_NEWLINE
+                  : ONE_LINE_BLOCK_NOT_CLOSED,
+            );
+          }
+          body.parts.push(...this.recoverToLineEnd());
+        }
+      }
+    }
+    if (this.peek().kind === TokenKind.NEWLINE) {
+      this.parseBodyItems(body, TokenKind.RBRACE);
+    }
+    return finishBody(body);
   }
 
   /**
@@ -183,7 +288,7 @@ export class Parser {
   private parseStatement(): AttributeNode | BlockNode | Token[] {
     const head = this.peek();
     if (head.kind !== TokenKind.IDENT) {
-      this.errorAt(head.range, `expected an attribute or block, got ${head.kind}`);
+      this.errorAtToken(head, `expected an attribute or block, got ${head.kind}`);
       return this.recoverToLineEnd();
     }
 
@@ -199,8 +304,8 @@ export class Parser {
     ) {
       return this.parseBlock();
     }
-    this.errorAt(
-      next.range,
+    this.errorAtToken(
+      next,
       `expected '=' or a block header after identifier, got ${next.kind}`,
     );
     return this.recoverToLineEnd();
@@ -240,7 +345,13 @@ export class Parser {
     const labels = this.parseBlockLabels();
 
     const lbrace = this.expect(TokenKind.LBRACE);
-    const body = this.parseBody(TokenKind.RBRACE);
+    const first = this.peek().kind;
+    const body =
+      first === TokenKind.NEWLINE ||
+      first === TokenKind.EOF ||
+      first === TokenKind.RBRACE
+        ? this.parseBody(TokenKind.RBRACE)
+        : this.parseOneLineBody();
     const rbrace = this.expect(TokenKind.RBRACE);
 
     const parts: (Token | BlockLabelsNode | BodyNode)[] = [typeTok];
@@ -291,7 +402,7 @@ export class Parser {
             literalParts.push(inner.lexeme);
             parts.push(this.consume());
             if (inner.kind === TokenKind.INVALID) {
-              this.errorAt(inner.range, inner.error ?? "invalid label text");
+              this.errorAtToken(inner, "invalid label text");
             }
             continue;
           }
@@ -330,8 +441,8 @@ export class Parser {
         continue;
       }
       // Anything else in the label position is a structural error.
-      this.errorAt(
-        tok.range,
+      this.errorAtToken(
+        tok,
         `expected block label or '{', got ${tok.kind}`,
       );
       break;
@@ -389,7 +500,7 @@ export class Parser {
     if (tok.kind === kind) {
       return this.consume();
     }
-    this.errorAt(tok.range, `expected ${kind}, got ${tok.kind}`);
+    this.errorAtToken(tok, `expected ${kind}, got ${tok.kind}`);
     return syntheticToken(kind, tok.range.start);
   }
 
@@ -404,14 +515,33 @@ export class Parser {
   }
 
   /**
+   * Report an error at `tok`. A token the lexer could not read (INVALID)
+   * carries its own message, such as "invalid character", which says
+   * more than `message`; it is reported once, however many rules trip
+   * over it during recovery.
+   *
+   * @internal Used by the expression parser; not part of the public API.
+   */
+  errorAtToken(tok: Token, message: string): void {
+    if (tok.kind === TokenKind.INVALID && tok.error !== undefined) {
+      if (this.reportedInvalid.has(tok)) return;
+      this.reportedInvalid.add(tok);
+      this.errorAt(tok.range, tok.error);
+      return;
+    }
+    this.errorAt(tok.range, message);
+  }
+
+  /**
    * Resync to the next top-level statement boundary after an error. We
    * skip tokens up to (but not including) the next NEWLINE, RBRACE, or
    * EOF at depth 0, while also respecting paren / bracket / brace
    * nesting so that we don't treat a RBRACE inside a struct literal as a
-   * resync point. Returns the skipped tokens so the caller can keep them
-   * in the CST.
+   * resync point. With `stopAtRBrace` false, a `}` at depth 0 is skipped
+   * like any other token. Returns the skipped tokens so the caller can
+   * keep them in the CST.
    */
-  private recoverToLineEnd(): Token[] {
+  private recoverToLineEnd(stopAtRBrace = true): Token[] {
     const skipped: Token[] = [];
     let depth = 0;
     while (!this.atEnd()) {
@@ -419,7 +549,7 @@ export class Parser {
       if (depth === 0) {
         if (
           tok.kind === TokenKind.NEWLINE ||
-          tok.kind === TokenKind.RBRACE ||
+          (tok.kind === TokenKind.RBRACE && stopAtRBrace) ||
           tok.kind === TokenKind.EOF
         ) {
           break;
@@ -433,12 +563,56 @@ export class Parser {
   }
 }
 
+/** A body being parsed: its statements so far, in source order. */
+interface BodyBuilder {
+  readonly start: Position;
+  readonly parts: (AttributeNode | BlockNode | Token)[];
+  readonly attributes: AttributeNode[];
+  readonly blocks: BlockNode[];
+  /** The first argument set under each name, for "attribute redefined". */
+  readonly firstByName: Map<string, AttributeNode>;
+}
+
+function finishBody(body: BodyBuilder): BodyNode {
+  const { start, parts, attributes, blocks } = body;
+  const end = parts.length > 0 ? endOfPart(parts[parts.length - 1]!) : start;
+  return { kind: "Body", range: { start, end }, parts, attributes, blocks };
+}
+
 /**
  * Endpoint of a CST/Token part, for range computation. Tokens expose their
  * range.end directly; CST nodes expose their node range.
  */
 function endOfPart(part: AttributeNode | BlockNode | Token): Position {
   return "lexeme" in part ? part.range.end : part.range.end;
+}
+
+// Statement-ending errors. Each starts with Terraform's summary for the
+// same error (hashicorp/hcl, hclsyntax/parser.go), in lower case.
+const MISSING_NEWLINE_AFTER_ARGUMENT =
+  "missing newline after argument: an argument definition must end with a newline";
+const MISSING_NEWLINE_AFTER_BLOCK =
+  "missing newline after block definition: a block definition must end with a newline";
+const COMMA_AFTER_ARGUMENT =
+  "unexpected comma after argument: argument definitions must be separated " +
+  "by newlines, not commas";
+const ONE_LINE_BLOCK_COMMA =
+  "invalid single-argument block definition: a single-line block can hold " +
+  "only one argument; to set more, put each argument on its own line";
+const ONE_LINE_BLOCK_NEWLINE =
+  "invalid single-argument block definition: an argument on the same line " +
+  "as the block's '{' makes a single-line block, which must also close on " +
+  "that line; put the '}' right after the argument";
+const ONE_LINE_BLOCK_NOT_CLOSED =
+  "invalid single-argument block definition: a single-line block must end " +
+  "with '}' right after its one argument";
+
+function nestedBlockInOneLineBlock(name: string): string {
+  return (
+    "argument definition required: a single-line block can hold only one " +
+    `argument; to set argument "${name}", use "="; to define a nested ` +
+    "block, put it on its own line inside the parent block"
+  );
 }
 
 /**

@@ -32,9 +32,9 @@ export const ANONYMOUS_FILENAME = "<input>";
  * `positionOf(offset)` runs in O(log lines) amortized. Constructing a
  * SourceFile is one linear pass over the text.
  *
- * Recognised line terminators: LF (`\n`), CRLF (`\r\n`), and bare CR (`\r`).
- * HCL2's spec only names LF and CRLF, but bare CR is accepted for robustness
- * against files that crossed a Classic-Mac-era checkout.
+ * Recognised line terminators: LF (`\n`) and CRLF (`\r\n`), as in HCL. A
+ * bare CR is not one: it is part of its line, so positions after it match
+ * Terraform's. (Error snippets show it as a space; see formatSnippet.)
  */
 export class SourceFile {
   readonly filename: string;
@@ -103,28 +103,13 @@ export class SourceFile {
 
 /**
  * One linear pass to identify every line terminator and record the offset
- * that follows it. Handles LF, CRLF (as a single terminator), and bare CR.
+ * that follows it. A line ends at LF; in CRLF the CR is part of the
+ * terminator. A bare CR is ordinary text.
  */
 function computeLineStarts(text: string): number[] {
   const starts: number[] = [0];
-  const n = text.length;
-  let i = 0;
-  while (i < n) {
-    const c = text.charCodeAt(i);
-    if (c === 0x0a /* LF */) {
-      starts.push(i + 1);
-      i++;
-    } else if (c === 0x0d /* CR */) {
-      if (i + 1 < n && text.charCodeAt(i + 1) === 0x0a) {
-        starts.push(i + 2);
-        i += 2;
-      } else {
-        starts.push(i + 1);
-        i++;
-      }
-    } else {
-      i++;
-    }
+  for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) {
+    starts.push(i + 1);
   }
   return starts;
 }
@@ -169,6 +154,6 @@ function countCodePoints(text: string, start: number, end: number): number {
 
 function stripTrailingNewline(line: string): string {
   if (line.endsWith("\r\n")) return line.slice(0, -2);
-  if (line.endsWith("\n") || line.endsWith("\r")) return line.slice(0, -1);
+  if (line.endsWith("\n")) return line.slice(0, -1);
   return line;
 }

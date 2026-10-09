@@ -14,9 +14,11 @@
  * the final EOF) reproduces the input source byte-for-byte. The lex tests
  * verify this invariant on every fixture.
  *
- * Newline handling: real `\n` / `\r\n` / `\r` terminators emit NEWLINE
+ * Newline handling: real `\n` / `\r\n` terminators emit NEWLINE
  * tokens at the top level so the parser can use them as statement
- * terminators. Inside balanced `(...)` and `[...]`, and inside
+ * terminators. As in hashicorp/hcl, a CR on its own is not a line break:
+ * outside strings and comments it is an INVALID token. Inside balanced
+ * `(...)` and `[...]`, and inside
  * `${...}` / `%{...}` interpolations, newlines are treated as whitespace
  * and absorbed into leading trivia. Braces (`{...}`) do NOT suppress
  * newlines at the lexer level; the parser decides later whether a given
@@ -41,6 +43,16 @@ interface ModeFrame {
    * emitted.
    */
   braceDepth: number;
+  /**
+   * TEMPLATE_INTERP / TEMPLATE_CONTROL only: the offset just after the
+   * `${` or `%{`, where a `~` strip marker may sit.
+   */
+  bodyStart?: number;
+  /**
+   * TEMPLATE_INTERP / TEMPLATE_CONTROL only: how many brackets were open
+   * when the sequence began. Brackets above this belong to the sequence.
+   */
+  bracketBase?: number;
 }
 
 const SPACE = 0x20;
@@ -55,6 +67,18 @@ const BACKSLASH = 0x5c;
 const DOLLAR = 0x24;
 const PERCENT = 0x25;
 const LBRACE = 0x7b;
+/**
+ * Bracket-stack entry for a `{` that opens a for expression. Unlike an
+ * object's `{`, it treats line breaks as whitespace, as hclsyntax does
+ * for the whole of a for expression.
+ */
+const FOR_BRACE = 0x1007b;
+/**
+ * Bracket-stack entry for the `[` of a `[*]` opened where line breaks
+ * count. Unlike other brackets it keeps them counting, so a line break
+ * inside the splat marker is an error, as in hclsyntax.
+ */
+const SPLAT_BRACKET = 0x1005b;
 const RBRACE = 0x7d;
 const TILDE = 0x7e;
 const LT = 0x3c;
@@ -71,10 +95,10 @@ export class Lexer {
   private pos = 0;
   private readonly modes: ModeFrame[] = [{ kind: "NORMAL", braceDepth: 0 }];
   /**
-   * Stack of open parenthesis / bracket kinds, for newline suppression.
-   * Braces are not pushed here — they are handled by the mode stack
-   * (TEMPLATE_INTERP / TEMPLATE_CONTROL) because their meaning depends on
-   * context the lexer cannot determine on its own.
+   * Stack of open `(`, `[` and `{`, for newline suppression. A template
+   * sequence (`${ }` / `%{ }`) owns the brackets opened inside it: an
+   * extra closer there cannot pop one opened outside, and the ones left
+   * open are dropped when the sequence ends.
    */
   private readonly brackets: number[] = [];
 
@@ -88,10 +112,14 @@ export class Lexer {
     for (;;) {
       const token = this.nextToken();
       tokens.push(token);
+      this.previous = token;
       if (token.kind === TokenKind.EOF) break;
     }
     return tokens;
   }
+
+  /** The token before the one being scanned, if any. */
+  private previous: Token | null = null;
 
   private currentMode(): ModeFrame {
     return this.modes[this.modes.length - 1]!;
@@ -99,20 +127,24 @@ export class Lexer {
 
   private shouldSuppressNewlines(): boolean {
     const top = this.currentMode();
-    if (top.kind === "TEMPLATE_INTERP" || top.kind === "TEMPLATE_CONTROL") {
-      return true;
-    }
-    // Inside ( or [, newlines are insignificant. Braces are also pushed
-    // onto the bracket stack so we can tell when we've re-entered a
-    // newline-significant context (like an object literal inside a
-    // function-call argument) — but `{` is emitted as "preserve
-    // newlines" so that nested object items still get their separators.
-    if (top.kind === "NORMAL" && this.brackets.length > 0) {
+    // The innermost bracket opened in the current context decides: inside
+    // ( or [ or a for expression's { newlines are insignificant, inside an
+    // object's { they separate items (as in an object literal in a call
+    // argument, or in `${ }`).
+    if (this.brackets.length > (top.bracketBase ?? 0)) {
       const topBracket = this.brackets[this.brackets.length - 1]!;
-      // 0x28 '(' and 0x5b '[' suppress; 0x7b '{' does not.
-      return topBracket === 0x28 || topBracket === 0x5b;
+      return topBracket === 0x28 || topBracket === 0x5b || topBracket === FOR_BRACE;
     }
-    return false;
+    // With no bracket of its own open, `${ }` and `%{ }` treat newlines as
+    // whitespace; the top level keeps them as statement ends.
+    return top.kind === "TEMPLATE_INTERP" || top.kind === "TEMPLATE_CONTROL";
+  }
+
+  /** Close the innermost bracket, but never one opened outside the current sequence. */
+  private popBracket(): void {
+    if (this.brackets.length > (this.currentMode().bracketBase ?? 0)) {
+      this.brackets.pop();
+    }
   }
 
   private nextToken(): Token {
@@ -157,10 +189,12 @@ export class Lexer {
         this.pos++;
         continue;
       }
-      if ((c === LF || c === CR) && this.shouldSuppressNewlines()) {
-        if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-        this.pos++;
-        continue;
+      if (this.shouldSuppressNewlines()) {
+        const width = this.lineBreakWidth(this.pos);
+        if (width > 0) {
+          this.pos += width;
+          continue;
+        }
       }
       if (c === HASH) {
         this.skipLineComment();
@@ -173,6 +207,9 @@ export class Lexer {
           continue;
         }
         if (next === STAR) {
+          // An unterminated `/*` is not trivia: scanNormalLexeme turns it
+          // into an INVALID token so the parser reports it.
+          if (this.text.indexOf("*/", this.pos + 2) === -1) break;
           this.skipBlockComment();
           continue;
         }
@@ -213,16 +250,96 @@ export class Lexer {
     }
   }
 
-  /** Advance past a `#` or `//` comment up to (not including) the newline. */
+  /**
+   * Advance past a `#` or `//` comment up to (not including) the line
+   * break. A lone CR does not end the comment.
+   */
   private skipLineComment(): void {
     while (this.pos < this.text.length) {
-      const c = this.text.charCodeAt(this.pos);
-      if (c === LF || c === CR) break;
+      if (this.lineBreakWidth(this.pos) > 0) break;
       this.pos++;
     }
   }
 
-  /** Advance past a `/* ... *\/` comment. If unterminated, consume to EOF. */
+  /** 2 for CRLF at `at`, 1 for LF, 0 otherwise (a lone CR included). */
+  private lineBreakWidth(at: number): number {
+    const c = this.text.charCodeAt(at);
+    if (c === LF) return 1;
+    if (c === CR && this.text.charCodeAt(at + 1) === LF) return 2;
+    return 0;
+  }
+
+  /**
+   * True when the `{` at `pos` opens a for expression: the next tokens,
+   * past whitespace, line breaks and comments, are `for <name> [, <name>]
+   * in`. A `{` right after a block header (a name, or a quoted label) is a
+   * block body even if its first line reads that way; `in` and `if` are
+   * the names an expression `{` can follow.
+   */
+  private opensForExpression(): boolean {
+    const prev = this.previous;
+    if (prev?.kind === TokenKind.CQUOTE) return false;
+    if (prev?.kind === TokenKind.IDENT && prev.lexeme !== "in" && prev.lexeme !== "if") {
+      return false;
+    }
+    let i = this.skipBlank(this.pos + 1);
+    if (!this.isWordAt(i, "for")) return false;
+    i = this.skipBlank(i + 3);
+    i = this.skipIdent(i);
+    if (i < 0) return false;
+    i = this.skipBlank(i);
+    if (this.text.charCodeAt(i) === 0x2c /* , */) {
+      i = this.skipIdent(this.skipBlank(i + 1));
+      if (i < 0) return false;
+      i = this.skipBlank(i);
+    }
+    return this.isWordAt(i, "in");
+  }
+
+  /** True when `[`, `*`, `]` (with only blanks between) start at `i`. */
+  private atSplatMarker(i: number): boolean {
+    const star = this.skipBlank(i + 1);
+    if (this.text.charCodeAt(star) !== STAR) return false;
+    return this.text.charCodeAt(this.skipBlank(star + 1)) === 0x5d /* ] */;
+  }
+
+  /** Skip spaces, tabs, line breaks (LF, CRLF) and comments from `i`. */
+  private skipBlank(i: number): number {
+    for (;;) {
+      const c = this.text.charCodeAt(i);
+      if (c === SPACE || c === TAB) {
+        i++;
+      } else if (this.lineBreakWidth(i) > 0) {
+        i += this.lineBreakWidth(i);
+      } else if (c === HASH || (c === SLASH && this.text.charCodeAt(i + 1) === SLASH)) {
+        while (i < this.text.length && this.lineBreakWidth(i) === 0) i++;
+      } else if (c === SLASH && this.text.charCodeAt(i + 1) === STAR) {
+        const end = this.text.indexOf("*/", i + 2);
+        if (end === -1) return i;
+        i = end + 2;
+      } else {
+        return i;
+      }
+    }
+  }
+
+  /** True when the identifier `word`, and nothing longer, starts at `i`. */
+  private isWordAt(i: number, word: string): boolean {
+    return (
+      this.text.startsWith(word, i) && !isIdContinueCode(this.text, i + word.length)
+    );
+  }
+
+  /** The offset just past an identifier starting at `i`, or -1 if none does. */
+  private skipIdent(i: number): number {
+    if (!isIdStartCode(this.text, i)) return -1;
+    do {
+      i += (this.text.codePointAt(i) ?? 0) > 0xffff ? 2 : 1;
+    } while (i < this.text.length && isIdContinueCode(this.text, i));
+    return i;
+  }
+
+  /** Advance past a `/* ... *\/` comment (callers check that it closes). */
   private skipBlockComment(): void {
     this.pos += 2; // consume opening `/*`
     while (this.pos < this.text.length) {
@@ -242,7 +359,7 @@ export class Lexer {
     let i = from + 2;
     while (i < this.text.length - 1) {
       const c = this.text.charCodeAt(i);
-      if (c === LF || c === CR) return false;
+      if (c === LF) return false;
       if (c === STAR && this.text.charCodeAt(i + 1) === SLASH) return true;
       i++;
     }
@@ -290,10 +407,20 @@ export class Lexer {
 
   private scanNormalLexeme(c: number): { kind: TokenKind; error?: string } {
     // Newline at top level (only reached when suppression is off).
-    if (c === LF || c === CR) {
-      if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-      this.pos++;
+    const lineBreak = this.lineBreakWidth(this.pos);
+    if (lineBreak > 0) {
+      this.pos += lineBreak;
       return { kind: TokenKind.NEWLINE };
+    }
+    if (c === CR) {
+      this.pos++;
+      return { kind: TokenKind.INVALID, error: LONE_CR };
+    }
+
+    // A `/*` with no `*/` after it (skipLeadingTrivia leaves only those).
+    if (c === SLASH && this.text.charCodeAt(this.pos + 1) === STAR) {
+      this.pos = this.text.length;
+      return { kind: TokenKind.INVALID, error: UNTERMINATED_COMMENT };
     }
 
     // String literal opener.
@@ -323,30 +450,32 @@ export class Lexer {
       if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
         mode.braceDepth--;
       }
-      // Pop the matching LBRACE off the bracket stack (pushed for
+      // Pop the matching `{` off the bracket stack (pushed for
       // newline-significance tracking above).
-      if (
-        this.brackets.length > 0 &&
-        this.brackets[this.brackets.length - 1] === LBRACE
-      ) {
-        this.brackets.pop();
+      const top = this.brackets[this.brackets.length - 1];
+      if (top === LBRACE || top === FOR_BRACE) {
+        this.popBracket();
       }
       this.pos++;
       return { kind: TokenKind.RBRACE };
     }
 
     // Strip markers (~) immediately inside ${~ ... ~} or %{~ ... ~}.
-    // The parser distinguishes strip-on-enter vs strip-on-exit based on
-    // position; here we only emit the TEMPLATE_STRIP token kind.
+    // As in hashicorp/hcl, `~` is a strip marker only right after the
+    // `${` / `%{` or right before a `}`; anywhere else it is bitwise NOT,
+    // which HCL does not support. The parser tells strip-on-enter from
+    // strip-on-exit by position; here we only emit TEMPLATE_STRIP.
     if (c === TILDE) {
       const mode = this.currentMode();
-      if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
-        this.pos++;
-        return { kind: TokenKind.TEMPLATE_STRIP };
-      }
-      // Outside a template sequence, `~` is not a valid token.
+      const at = this.pos;
       this.pos++;
-      return { kind: TokenKind.INVALID, error: "unexpected character '~'" };
+      if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
+        if (at === mode.bodyStart || this.text.charCodeAt(this.pos) === RBRACE) {
+          return { kind: TokenKind.TEMPLATE_STRIP };
+        }
+        return { kind: TokenKind.INVALID, error: MISPLACED_STRIP_MARKER };
+      }
+      return { kind: TokenKind.INVALID, error: BITWISE_NOT };
     }
 
     if (c === LBRACE) {
@@ -358,7 +487,8 @@ export class Lexer {
       // () or [] re-enters a newline-significant context (see
       // shouldSuppressNewlines). Block bodies also land here, which is
       // fine — the parser is already newline-tolerant in block bodies.
-      this.brackets.push(LBRACE);
+      // A `{` that opens a for expression is pushed as FOR_BRACE instead.
+      this.brackets.push(this.opensForExpression() ? FOR_BRACE : LBRACE);
       this.pos++;
       return { kind: TokenKind.LBRACE };
     }
@@ -394,15 +524,17 @@ export class Lexer {
         return { kind: TokenKind.LPAREN };
       case 0x29 /* ) */:
         this.pos++;
-        this.brackets.pop();
+        this.popBracket();
         return { kind: TokenKind.RPAREN };
-      case 0x5b /* [ */:
+      case 0x5b /* [ */: {
+        const splat = !this.shouldSuppressNewlines() && this.atSplatMarker(this.pos);
         this.pos++;
-        this.brackets.push(c);
+        this.brackets.push(splat ? SPLAT_BRACKET : c);
         return { kind: TokenKind.LBRACK };
+      }
       case 0x5d /* ] */:
         this.pos++;
-        this.brackets.pop();
+        this.popBracket();
         return { kind: TokenKind.RBRACK };
       case 0x2c /* , */:
         this.pos++;
@@ -557,17 +689,15 @@ export class Lexer {
       this.advanceCodePoint();
     }
     const delimiter = this.text.slice(identStart, this.pos);
-    // Require newline after delimiter (consumed as part of HEREDOC_BEGIN).
-    const nlChar = this.text.charCodeAt(this.pos);
-    if (nlChar === CR && this.text.charCodeAt(this.pos + 1) === LF) {
-      this.pos += 2;
-    } else if (nlChar === LF || nlChar === CR) {
-      this.pos++;
-    } else {
+    // Require a line break after the delimiter (consumed as part of
+    // HEREDOC_BEGIN).
+    const lineBreak = this.lineBreakWidth(this.pos);
+    if (lineBreak === 0) {
       // Not a well-formed heredoc; back out and let caller handle `<<` as LT LT.
       this.pos = save;
       return null;
     }
+    this.pos += lineBreak;
     this.pushMode({ kind: "TEMPLATE", heredoc: { delimiter, strip }, braceDepth: 0 });
     return { kind: TokenKind.HEREDOC_BEGIN };
   }
@@ -599,7 +729,12 @@ export class Lexer {
     // Interpolation opener: ${ or %{
     if (c === DOLLAR && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_INTERP", braceDepth: 0 });
+      this.pushMode({
+        kind: "TEMPLATE_INTERP",
+        braceDepth: 0,
+        bodyStart: this.pos,
+        bracketBase: this.brackets.length,
+      });
       // Skip optional strip marker immediately after ${
       // (Emitted as a separate TEMPLATE_STRIP by the next call.)
       return this.finishTemplateStructural(
@@ -610,7 +745,12 @@ export class Lexer {
     }
     if (c === PERCENT && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_CONTROL", braceDepth: 0 });
+      this.pushMode({
+        kind: "TEMPLATE_CONTROL",
+        braceDepth: 0,
+        bodyStart: this.pos,
+        bracketBase: this.brackets.length,
+      });
       return this.finishTemplateStructural(
         TokenKind.TEMPLATE_CONTROL,
         leadingStart,
@@ -696,13 +836,28 @@ export class Lexer {
           );
         }
       } else {
-        if (c === LF || c === CR) {
+        const lineBreak = this.lineBreakWidth(this.pos);
+        if (lineBreak > 0) {
           // Advance past the newline as part of the literal, then check
           // for a closing delimiter at the start of the next line.
-          if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-          this.pos++;
+          this.pos += lineBreak;
           if (this.matchHeredocEnd(this.pos, mode.heredoc) > 0) break;
           continue;
+        }
+        if (c === CR) {
+          // A lone CR is not a line break (hashicorp/hcl reports "Invalid
+          // character"). It gets its own INVALID token and the body
+          // carries on after it.
+          if (this.pos > lexemeStart) break;
+          this.pos++;
+          return this.make(
+            TokenKind.INVALID,
+            leadingStart,
+            lexemeStart,
+            this.pos,
+            this.pos,
+            LONE_CR,
+          );
         }
       }
 
@@ -775,8 +930,7 @@ export class Lexer {
    */
   private atStartOfHeredocLine(offset: number): boolean {
     if (offset === 0) return true;
-    const prev = this.text.charCodeAt(offset - 1);
-    return prev === LF || prev === CR;
+    return this.text.charCodeAt(offset - 1) === LF;
   }
 
   /**
@@ -805,13 +959,8 @@ export class Lexer {
     const delim = heredoc.delimiter;
     if (this.text.slice(i, i + delim.length) !== delim) return 0;
     const after = i + delim.length;
-    const afterChar = this.text.charCodeAt(after);
-    // Delimiter must be followed by newline or EOF.
-    if (
-      after !== this.text.length &&
-      afterChar !== LF &&
-      afterChar !== CR
-    ) {
+    // Delimiter must be followed by a line break (LF or CRLF) or EOF.
+    if (after !== this.text.length && this.lineBreakWidth(after) === 0) {
       return 0;
     }
     return after - offset;
@@ -826,7 +975,12 @@ export class Lexer {
   }
 
   private popMode(): void {
-    if (this.modes.length > 1) this.modes.pop();
+    if (this.modes.length <= 1) return;
+    const frame = this.modes.pop()!;
+    // Drop brackets a template sequence left open.
+    if (frame.bracketBase !== undefined) {
+      this.brackets.length = frame.bracketBase;
+    }
   }
 
   /** Advance `pos` past exactly one Unicode code point (handles surrogate pairs). */
@@ -850,6 +1004,20 @@ function isDigit(c: number): boolean {
 function isHexDigit(c: number): boolean {
   return isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
 }
+
+const LONE_CR =
+  "invalid character: a carriage return (CR) on its own is not a line " +
+  "break; end lines with LF or CRLF";
+
+const BITWISE_NOT =
+  'unsupported operator: bitwise operators are not supported; did you mean boolean NOT ("!")?';
+
+const MISPLACED_STRIP_MARKER =
+  'unsupported operator: "~" strips whitespace only right after "${" or ' +
+  '"%{" or right before "}"; HCL has no bitwise NOT';
+
+const UNTERMINATED_COMMENT =
+  "unterminated comment: a /* comment must be closed with */";
 
 const MULTI_LINE_STRING =
   "invalid multi-line string: a quoted string cannot span lines; " +
