@@ -443,6 +443,86 @@ describe("Document.set: insertion into empty and one-line blocks", () => {
   }
 });
 
+// A heredoc's closing marker has to end its line, so a one-line block
+// can't hold one. Giving a one-line block's argument a value that prints
+// as a heredoc splits the block the same way an insert does.
+describe("Document.set: heredoc value for a one-line block's argument", () => {
+  const LINES = "l1\nl2\nl3\nl4\n";
+  const HEREDOC = "<<EOT\nl1\nl2\nl3\nl4\nEOT";
+  const LONG = "x".repeat(90);
+  const CASES: Array<{
+    name: string;
+    input: string;
+    mutate: (d: Document) => void;
+    expected: string;
+  }> = [
+    {
+      name: "one-line block",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "one-line block without spaces",
+      input: "b {a = 1}\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "a string over 80 characters ending in a line break",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], `${LONG}\n`),
+      expected: `b {\n  a = <<EOT\n${LONG}\nEOT\n}\n`,
+    },
+    {
+      name: "comment after the closing `}`",
+      input: "b { a = 1 } # tail\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n} # tail\n`,
+    },
+    {
+      name: "block with labels",
+      input: 'resource "t" "n" { a = 1 }\n',
+      mutate: (d) => d.set(["resource", "t", "n", "a"], LINES),
+      expected: `resource "t" "n" {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "nested one-line block",
+      input: "a {\n  b { x = 1 }\n}\n",
+      mutate: (d) => d.set(["a", "b", "x"], LINES),
+      expected: `a {\n  b {\n    x = ${HEREDOC}\n  }\n}\n`,
+    },
+    {
+      name: "then a new argument",
+      input: "b { a = 1 }\n",
+      mutate: (d) => {
+        d.set(["b", "a"], LINES);
+        d.set(["b", "c"], 2);
+      },
+      expected: `b {\n  a = ${HEREDOC}\n  c = 2\n}\n`,
+    },
+    {
+      name: "a multi-line block is left as it is",
+      input: "b {\n  a = 1\n}\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "a value that stays quoted keeps the block on one line",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], "l1\nl2"),
+      expected: 'b { a = "l1\\nl2" }\n',
+    },
+  ];
+  for (const c of CASES) {
+    it(c.name, () => {
+      const out = edited(c.input, c.mutate);
+      expect(parseDocument(out).toString()).toBe(out);
+      expect(out).toBe(c.expected);
+    });
+  }
+});
+
 describe("Document.delete", () => {
   it("removes a top-level attribute and its following newline", () => {
     const out = edited("a = 1\nb = 2\nc = 3\n", (d) => d.delete("b"));
