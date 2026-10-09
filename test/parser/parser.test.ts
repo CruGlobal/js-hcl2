@@ -421,6 +421,40 @@ describe("a lone CR", () => {
   });
 });
 
+describe("an unterminated /* comment", () => {
+  // hashicorp/hcl rejects these too (it reads the `/` and `*` as
+  // operators); the error here says what is wrong.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["alone", "/* abc", 1, 1],
+    ["only the opener", "/*", 1, 1],
+    ["after an argument", "a = 1 /* abc", 1, 7],
+    ["on its own line", "a = 1\n/* abc", 2, 1],
+    ["followed by a line break", "a = 1\n/*\n", 2, 1],
+    ["in a block", "b {\n/* x\n}\n", 2, 1],
+    ["in a list", "a = [1, /* x", 1, 9],
+  ])("reports it at the /*: %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^unterminated comment/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile("a = 1\n/* abc"))).toThrow(/^unterminated comment/);
+  });
+
+  it.each([
+    ["a closed comment at the end of the file", "a = 1 /* abc */"],
+    ["an empty comment", "/**/\n"],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
 describe("an argument set twice in one body", () => {
   // hashicorp/hcl reports "Attribute redefined" while parsing a body
   // (hclsyntax ParseBody), so `terraform fmt` rejects it too.

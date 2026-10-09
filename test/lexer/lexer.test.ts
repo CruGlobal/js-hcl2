@@ -717,6 +717,30 @@ describe("a lone CR is not a line break", () => {
   });
 });
 
+describe("an unterminated /* comment", () => {
+  it.each([
+    ["alone", "/* abc", "/* abc"],
+    ["only the opener", "/*", "/*"],
+    ["after an argument", "a = 1 /* abc", "/* abc"],
+    ["on its own line", "a = 1\n/* abc\n", "/* abc\n"],
+    ["inside an interpolation", 'a = "${ x /* }"\n', '/* }"\n'],
+  ])("becomes one INVALID token to the end of the file: %s", (_ctx, input, lexeme) => {
+    const bad = tokens(input).filter((t) => t.kind === TokenKind.INVALID);
+    expect(bad.map((t) => t.lexeme)).toEqual([lexeme]);
+    expect(bad[0]!.error).toMatch(/^unterminated comment/);
+    expectRejoin(input);
+  });
+
+  it.each([
+    ["a closed comment", "a = 1 /* abc */"],
+    ["an empty comment", "/**/"],
+    ["a comment over two lines", "a = 1 /* x\ny */\n"],
+  ])("leaves %s as trivia", (_ctx, input) => {
+    expect(kindsOnly(input)).not.toContain(TokenKind.INVALID);
+    expectRejoin(input);
+  });
+});
+
 describe("suppressed newlines inside interpolations", () => {
   it("treats newlines as whitespace inside ${...}", () => {
     const ts = tokens('"${\n  foo\n}"');
