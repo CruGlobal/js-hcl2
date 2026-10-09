@@ -945,8 +945,14 @@ function parseControlDirective(ctx: ExprCursor): TemplatePart {
   const nameLookahead = peekDirectiveName(ctx);
   if (nameLookahead === "if") return parseIfDirective(ctx);
   if (nameLookahead === "for") return parseForDirective(ctx);
-  // Unknown — consume conservatively and emit error.
-  ctx.errorAt(openToken.range, `unknown template directive: %{${nameLookahead ?? "?"}}`);
+  // Unknown — consume conservatively and emit error. A token the lexer
+  // could not read (such as a misplaced `~`) reports its own error.
+  const first = ctx.peek(ctx.peek(1).kind === TokenKind.TEMPLATE_STRIP ? 2 : 1);
+  if (first.kind === TokenKind.INVALID) {
+    ctx.errorAtToken(first, "unknown template directive");
+  } else {
+    ctx.errorAt(openToken.range, `unknown template directive: %{${nameLookahead ?? "?"}}`);
+  }
   // Fall back to treating it as an interpolation-ish sequence so we make
   // progress: consume through the matching %-brace.
   return parseGenericPercentDirective(ctx);

@@ -43,6 +43,11 @@ interface ModeFrame {
    * emitted.
    */
   braceDepth: number;
+  /**
+   * TEMPLATE_INTERP / TEMPLATE_CONTROL only: the offset just after the
+   * `${` or `%{`, where a `~` strip marker may sit.
+   */
+  bodyStart?: number;
 }
 
 const SPACE = 0x20;
@@ -363,17 +368,21 @@ export class Lexer {
     }
 
     // Strip markers (~) immediately inside ${~ ... ~} or %{~ ... ~}.
-    // The parser distinguishes strip-on-enter vs strip-on-exit based on
-    // position; here we only emit the TEMPLATE_STRIP token kind.
+    // As in hashicorp/hcl, `~` is a strip marker only right after the
+    // `${` / `%{` or right before a `}`; anywhere else it is bitwise NOT,
+    // which HCL does not support. The parser tells strip-on-enter from
+    // strip-on-exit by position; here we only emit TEMPLATE_STRIP.
     if (c === TILDE) {
       const mode = this.currentMode();
-      if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
-        this.pos++;
-        return { kind: TokenKind.TEMPLATE_STRIP };
-      }
-      // Outside a template sequence, `~` is not a valid token.
+      const at = this.pos;
       this.pos++;
-      return { kind: TokenKind.INVALID, error: "unexpected character '~'" };
+      if (mode.kind === "TEMPLATE_INTERP" || mode.kind === "TEMPLATE_CONTROL") {
+        if (at === mode.bodyStart || this.text.charCodeAt(this.pos) === RBRACE) {
+          return { kind: TokenKind.TEMPLATE_STRIP };
+        }
+        return { kind: TokenKind.INVALID, error: MISPLACED_STRIP_MARKER };
+      }
+      return { kind: TokenKind.INVALID, error: BITWISE_NOT };
     }
 
     if (c === LBRACE) {
@@ -624,7 +633,7 @@ export class Lexer {
     // Interpolation opener: ${ or %{
     if (c === DOLLAR && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_INTERP", braceDepth: 0 });
+      this.pushMode({ kind: "TEMPLATE_INTERP", braceDepth: 0, bodyStart: this.pos });
       // Skip optional strip marker immediately after ${
       // (Emitted as a separate TEMPLATE_STRIP by the next call.)
       return this.finishTemplateStructural(
@@ -635,7 +644,7 @@ export class Lexer {
     }
     if (c === PERCENT && this.text.charCodeAt(lexemeStart + 1) === LBRACE) {
       this.pos += 2;
-      this.pushMode({ kind: "TEMPLATE_CONTROL", braceDepth: 0 });
+      this.pushMode({ kind: "TEMPLATE_CONTROL", braceDepth: 0, bodyStart: this.pos });
       return this.finishTemplateStructural(
         TokenKind.TEMPLATE_CONTROL,
         leadingStart,
@@ -888,6 +897,13 @@ function isHexDigit(c: number): boolean {
 const LONE_CR =
   "invalid character: a carriage return (CR) on its own is not a line " +
   "break; end lines with LF or CRLF";
+
+const BITWISE_NOT =
+  'unsupported operator: bitwise operators are not supported; did you mean boolean NOT ("!")?';
+
+const MISPLACED_STRIP_MARKER =
+  'unsupported operator: "~" strips whitespace only right after "${" or ' +
+  '"%{" or right before "}"; HCL has no bitwise NOT';
 
 const UNTERMINATED_COMMENT =
   "unterminated comment: a /* comment must be closed with */";
