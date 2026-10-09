@@ -14,9 +14,11 @@
  * the final EOF) reproduces the input source byte-for-byte. The lex tests
  * verify this invariant on every fixture.
  *
- * Newline handling: real `\n` / `\r\n` / `\r` terminators emit NEWLINE
+ * Newline handling: real `\n` / `\r\n` terminators emit NEWLINE
  * tokens at the top level so the parser can use them as statement
- * terminators. Inside balanced `(...)` and `[...]`, and inside
+ * terminators. As in hashicorp/hcl, a CR on its own is not a line break:
+ * outside strings and comments it is an INVALID token. Inside balanced
+ * `(...)` and `[...]`, and inside
  * `${...}` / `%{...}` interpolations, newlines are treated as whitespace
  * and absorbed into leading trivia. Braces (`{...}`) do NOT suppress
  * newlines at the lexer level; the parser decides later whether a given
@@ -157,10 +159,12 @@ export class Lexer {
         this.pos++;
         continue;
       }
-      if ((c === LF || c === CR) && this.shouldSuppressNewlines()) {
-        if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-        this.pos++;
-        continue;
+      if (this.shouldSuppressNewlines()) {
+        const width = this.lineBreakWidth(this.pos);
+        if (width > 0) {
+          this.pos += width;
+          continue;
+        }
       }
       if (c === HASH) {
         this.skipLineComment();
@@ -213,13 +217,23 @@ export class Lexer {
     }
   }
 
-  /** Advance past a `#` or `//` comment up to (not including) the newline. */
+  /**
+   * Advance past a `#` or `//` comment up to (not including) the line
+   * break. A lone CR does not end the comment.
+   */
   private skipLineComment(): void {
     while (this.pos < this.text.length) {
-      const c = this.text.charCodeAt(this.pos);
-      if (c === LF || c === CR) break;
+      if (this.lineBreakWidth(this.pos) > 0) break;
       this.pos++;
     }
+  }
+
+  /** 2 for CRLF at `at`, 1 for LF, 0 otherwise (a lone CR included). */
+  private lineBreakWidth(at: number): number {
+    const c = this.text.charCodeAt(at);
+    if (c === LF) return 1;
+    if (c === CR && this.text.charCodeAt(at + 1) === LF) return 2;
+    return 0;
   }
 
   /** Advance past a `/* ... *\/` comment. If unterminated, consume to EOF. */
@@ -242,7 +256,7 @@ export class Lexer {
     let i = from + 2;
     while (i < this.text.length - 1) {
       const c = this.text.charCodeAt(i);
-      if (c === LF || c === CR) return false;
+      if (c === LF) return false;
       if (c === STAR && this.text.charCodeAt(i + 1) === SLASH) return true;
       i++;
     }
@@ -290,10 +304,14 @@ export class Lexer {
 
   private scanNormalLexeme(c: number): { kind: TokenKind; error?: string } {
     // Newline at top level (only reached when suppression is off).
-    if (c === LF || c === CR) {
-      if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-      this.pos++;
+    const lineBreak = this.lineBreakWidth(this.pos);
+    if (lineBreak > 0) {
+      this.pos += lineBreak;
       return { kind: TokenKind.NEWLINE };
+    }
+    if (c === CR) {
+      this.pos++;
+      return { kind: TokenKind.INVALID, error: LONE_CR };
     }
 
     // String literal opener.
@@ -557,17 +575,15 @@ export class Lexer {
       this.advanceCodePoint();
     }
     const delimiter = this.text.slice(identStart, this.pos);
-    // Require newline after delimiter (consumed as part of HEREDOC_BEGIN).
-    const nlChar = this.text.charCodeAt(this.pos);
-    if (nlChar === CR && this.text.charCodeAt(this.pos + 1) === LF) {
-      this.pos += 2;
-    } else if (nlChar === LF || nlChar === CR) {
-      this.pos++;
-    } else {
+    // Require a line break after the delimiter (consumed as part of
+    // HEREDOC_BEGIN).
+    const lineBreak = this.lineBreakWidth(this.pos);
+    if (lineBreak === 0) {
       // Not a well-formed heredoc; back out and let caller handle `<<` as LT LT.
       this.pos = save;
       return null;
     }
+    this.pos += lineBreak;
     this.pushMode({ kind: "TEMPLATE", heredoc: { delimiter, strip }, braceDepth: 0 });
     return { kind: TokenKind.HEREDOC_BEGIN };
   }
@@ -696,13 +712,28 @@ export class Lexer {
           );
         }
       } else {
-        if (c === LF || c === CR) {
+        const lineBreak = this.lineBreakWidth(this.pos);
+        if (lineBreak > 0) {
           // Advance past the newline as part of the literal, then check
           // for a closing delimiter at the start of the next line.
-          if (c === CR && this.text.charCodeAt(this.pos + 1) === LF) this.pos++;
-          this.pos++;
+          this.pos += lineBreak;
           if (this.matchHeredocEnd(this.pos, mode.heredoc) > 0) break;
           continue;
+        }
+        if (c === CR) {
+          // A lone CR is not a line break (hashicorp/hcl reports "Invalid
+          // character"). It gets its own INVALID token and the body
+          // carries on after it.
+          if (this.pos > lexemeStart) break;
+          this.pos++;
+          return this.make(
+            TokenKind.INVALID,
+            leadingStart,
+            lexemeStart,
+            this.pos,
+            this.pos,
+            LONE_CR,
+          );
         }
       }
 
@@ -775,8 +806,7 @@ export class Lexer {
    */
   private atStartOfHeredocLine(offset: number): boolean {
     if (offset === 0) return true;
-    const prev = this.text.charCodeAt(offset - 1);
-    return prev === LF || prev === CR;
+    return this.text.charCodeAt(offset - 1) === LF;
   }
 
   /**
@@ -805,13 +835,8 @@ export class Lexer {
     const delim = heredoc.delimiter;
     if (this.text.slice(i, i + delim.length) !== delim) return 0;
     const after = i + delim.length;
-    const afterChar = this.text.charCodeAt(after);
-    // Delimiter must be followed by newline or EOF.
-    if (
-      after !== this.text.length &&
-      afterChar !== LF &&
-      afterChar !== CR
-    ) {
+    // Delimiter must be followed by a line break (LF or CRLF) or EOF.
+    if (after !== this.text.length && this.lineBreakWidth(after) === 0) {
       return 0;
     }
     return after - offset;
@@ -850,6 +875,10 @@ function isDigit(c: number): boolean {
 function isHexDigit(c: number): boolean {
   return isDigit(c) || (c >= 0x41 && c <= 0x46) || (c >= 0x61 && c <= 0x66);
 }
+
+const LONE_CR =
+  "invalid character: a carriage return (CR) on its own is not a line " +
+  "break; end lines with LF or CRLF";
 
 const MULTI_LINE_STRING =
   "invalid multi-line string: a quoted string cannot span lines; " +

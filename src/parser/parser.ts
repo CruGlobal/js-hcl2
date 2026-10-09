@@ -99,6 +99,8 @@ export class Parser {
   private readonly tokens: readonly Token[];
   private readonly bail: boolean;
   private readonly errors: HCLParseError[] = [];
+  /** INVALID tokens already reported by `errorAtToken`. */
+  private readonly reportedInvalid = new Set<Token>();
   private pos = 0;
 
   constructor(source: SourceFile, options: ParserOptions = {}) {
@@ -219,7 +221,7 @@ export class Parser {
       let message = MISSING_NEWLINE_AFTER_ARGUMENT;
       if (stmt.kind === "Block") message = MISSING_NEWLINE_AFTER_BLOCK;
       else if (end.kind === TokenKind.COMMA) message = COMMA_AFTER_ARGUMENT;
-      this.errorAt(end.range, message);
+      this.errorAtToken(end, message);
     }
     // A `}` that closes the enclosing block is left for that block. At
     // the top level there is no block to close, so it is skipped too.
@@ -259,8 +261,8 @@ export class Parser {
         const end = this.peek();
         if (end.kind !== TokenKind.RBRACE && end.kind !== TokenKind.EOF) {
           if (this.errors.length === errorsBefore) {
-            this.errorAt(
-              end.range,
+            this.errorAtToken(
+              end,
               end.kind === TokenKind.COMMA
                 ? ONE_LINE_BLOCK_COMMA
                 : end.kind === TokenKind.NEWLINE
@@ -286,7 +288,7 @@ export class Parser {
   private parseStatement(): AttributeNode | BlockNode | Token[] {
     const head = this.peek();
     if (head.kind !== TokenKind.IDENT) {
-      this.errorAt(head.range, `expected an attribute or block, got ${head.kind}`);
+      this.errorAtToken(head, `expected an attribute or block, got ${head.kind}`);
       return this.recoverToLineEnd();
     }
 
@@ -302,8 +304,8 @@ export class Parser {
     ) {
       return this.parseBlock();
     }
-    this.errorAt(
-      next.range,
+    this.errorAtToken(
+      next,
       `expected '=' or a block header after identifier, got ${next.kind}`,
     );
     return this.recoverToLineEnd();
@@ -400,7 +402,7 @@ export class Parser {
             literalParts.push(inner.lexeme);
             parts.push(this.consume());
             if (inner.kind === TokenKind.INVALID) {
-              this.errorAt(inner.range, inner.error ?? "invalid label text");
+              this.errorAtToken(inner, "invalid label text");
             }
             continue;
           }
@@ -439,8 +441,8 @@ export class Parser {
         continue;
       }
       // Anything else in the label position is a structural error.
-      this.errorAt(
-        tok.range,
+      this.errorAtToken(
+        tok,
         `expected block label or '{', got ${tok.kind}`,
       );
       break;
@@ -498,7 +500,7 @@ export class Parser {
     if (tok.kind === kind) {
       return this.consume();
     }
-    this.errorAt(tok.range, `expected ${kind}, got ${tok.kind}`);
+    this.errorAtToken(tok, `expected ${kind}, got ${tok.kind}`);
     return syntheticToken(kind, tok.range.start);
   }
 
@@ -510,6 +512,22 @@ export class Parser {
     const err = new HCLParseError(this.source, range, message);
     this.errors.push(err);
     if (this.bail) throw err;
+  }
+
+  /**
+   * Report an error at `tok`. A token the lexer could not read (INVALID)
+   * carries its own message, such as "invalid character", which says
+   * more than `message`; it is reported once, however many rules trip
+   * over it during recovery.
+   */
+  errorAtToken(tok: Token, message: string): void {
+    if (tok.kind === TokenKind.INVALID && tok.error !== undefined) {
+      if (this.reportedInvalid.has(tok)) return;
+      this.reportedInvalid.add(tok);
+      this.errorAt(tok.range, tok.error);
+      return;
+    }
+    this.errorAt(tok.range, message);
   }
 
   /**

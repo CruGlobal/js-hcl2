@@ -60,6 +60,12 @@ export interface ExprCursor {
   consume(): Token;
   atEnd(): boolean;
   errorAt(range: Range, message: string): void;
+  /**
+   * Report an error at `tok`. A token the lexer could not read (INVALID)
+   * reports its own message instead, such as "invalid character", and
+   * only once however many rules trip over it.
+   */
+  errorAtToken(tok: Token, message: string): void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -81,7 +87,7 @@ function parseConditional(ctx: ExprCursor): ExprNode {
   const questionToken = ctx.consume();
   const then = parseExpression(ctx);
   if (ctx.peek().kind !== TokenKind.COLON) {
-    ctx.errorAt(ctx.peek().range, "expected ':' in conditional expression");
+    ctx.errorAtToken(ctx.peek(), "expected ':' in conditional expression");
     const node: ConditionalNode = {
       kind: "Conditional",
       range: { start: cond.range.start, end: then.range.end },
@@ -260,7 +266,7 @@ function parseAfterDot(ctx: ExprCursor, source: ExprNode): ExprNode {
     return appendTraversalStep(source, step);
   }
 
-  ctx.errorAt(next.range, `expected identifier after '.', got ${next.kind}`);
+  ctx.errorAtToken(next, `expected identifier after '.', got ${next.kind}`);
   // Recover: synthesize an empty GetAttr step.
   const synth = syntheticToken(TokenKind.IDENT, dotToken.range.end);
   const step: GetAttrStep = {
@@ -453,7 +459,7 @@ function parsePrimary(ctx: ExprCursor): ExprNode {
     case TokenKind.LPAREN:
       return parseParens(ctx);
     default:
-      ctx.errorAt(tok.range, `expected expression, got ${tok.kind}`);
+      ctx.errorAtToken(tok, `expected expression, got ${tok.kind}`);
       return errorExpr(ctx, `expected expression, got ${tok.kind}`);
   }
 }
@@ -539,7 +545,7 @@ function callNameError(
   at: Token,
   message: string,
 ): ErrorExprNode {
-  ctx.errorAt(at.range, message);
+  ctx.errorAtToken(at, message);
   return {
     kind: "ErrorExpr",
     range: {
@@ -649,8 +655,8 @@ function parseObjectAfterLBrace(ctx: ExprCursor, lbrace: Token): ObjectNode {
     if (!sawSeparator) {
       // No separator and not at closing brace — syntactic error, but we
       // continue so the user sees all their errors at once.
-      ctx.errorAt(
-        ctx.peek().range,
+      ctx.errorAtToken(
+        ctx.peek(),
         `expected ',' or newline between object items, got ${ctx.peek().kind}`,
       );
       break;
@@ -673,7 +679,7 @@ function parseObjectItem(ctx: ExprCursor): ObjectItemNode {
   if (sepTok.kind === TokenKind.ASSIGN || sepTok.kind === TokenKind.COLON) {
     separatorToken = ctx.consume();
   } else {
-    ctx.errorAt(sepTok.range, "expected '=' or ':' in object item");
+    ctx.errorAtToken(sepTok, "expected '=' or ':' in object item");
     separatorToken = syntheticToken(TokenKind.ASSIGN, key.range.end);
   }
   const value = parseExpression(ctx);
@@ -732,7 +738,7 @@ function parseForExpression(
   if (inTok.kind === TokenKind.IDENT && inTok.lexeme === "in") {
     parts.push(ctx.consume());
   } else {
-    ctx.errorAt(inTok.range, "expected 'in' in for expression");
+    ctx.errorAtToken(inTok, "expected 'in' in for expression");
   }
 
   consumeNewlines(ctx, parts);
@@ -1086,7 +1092,7 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
   if (inTok.kind === TokenKind.IDENT && inTok.lexeme === "in") {
     forParts.push(ctx.consume());
   } else {
-    ctx.errorAt(inTok.range, "expected 'in' in template for directive");
+    ctx.errorAtToken(inTok, "expected 'in' in template for directive");
   }
   const collection = parseExpression(ctx);
   forParts.push(collection);
@@ -1163,7 +1169,7 @@ function parseForDirective(ctx: ExprCursor): TemplateForDirectivePart {
 function parseStringPart(ctx: ExprCursor): TemplateStringPart {
   const strTok = ctx.consume();
   if (strTok.kind === TokenKind.INVALID) {
-    ctx.errorAt(strTok.range, strTok.error ?? "invalid template text");
+    ctx.errorAtToken(strTok, "invalid template text");
   }
   return {
     kind: "StringPart",
@@ -1279,7 +1285,7 @@ function expectOrSynth(
 ): Token {
   const tok = ctx.peek();
   if (tok.kind === kind) return ctx.consume();
-  ctx.errorAt(tok.range, message);
+  ctx.errorAtToken(tok, message);
   return syntheticToken(kind, tok.range.start);
 }
 
