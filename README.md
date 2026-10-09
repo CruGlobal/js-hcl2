@@ -251,7 +251,7 @@ aggregate `HCLParseError` whose `errors[]` has one entry per failure).
 | Heredoc strip form (`<<-EOT`)                          | ✅        | Recognised structurally; body content stored verbatim (strip happens at evaluation time — see below). |
 | Tuple and object literals (with trailing commas)       | ✅        |       |
 | Traversal (`.attr`, `[expr]`, legacy `.digit`)         | ✅        |       |
-| Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        | As in the HCL spec, `.*` takes attribute names only (in `a.*.b[0]` the index applies to the result), and splats can follow splats (`a[*].b[*].c`). |
+| Attribute splat (`a.*.b`) and full splat (`a[*].b`)    | ✅        | Nested the way hashicorp/hcl does: `.*` takes attribute names only (in `a.*.b[0]` the index applies to the result), and `[*]` runs every later step on each element, later splats included (`a[*].b[*].c` is one splat over `a`). |
 | Function calls (`f(a, b, c...)`)                       | ✅        | Includes provider-defined functions (`provider::aws::arn_parse(x)`); the call's `name` joins the segments with `::`. |
 | Unary `-` / `!`                                        | ✅        |       |
 | Binary `+ - * / % == != < <= > >= && \|\|`             | ✅        |       |

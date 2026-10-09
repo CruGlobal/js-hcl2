@@ -311,8 +311,11 @@ The lexer tracks a stack of modes to handle context-sensitive tokens:
 Heredocs are handled by detecting `<<IDENT` / `<<-IDENT` in `NORMAL` mode;
 the body is scanned line-by-line in `TEMPLATE` mode until a line equal to
 the delimiter (with optional leading whitespace for `<<-`) is found. The
-opener and the closing delimiter must each be followed by LF or CRLF (the
-closing one may also end the file). The
+opener must be followed by LF or CRLF, and so must the closing delimiter.
+Known gaps (BLOKS-66): a closing delimiter at the very end of the file,
+with no line break after it, is accepted here but rejected by Terraform;
+and one followed by spaces or tabs is rejected here but accepted by
+Terraform. The
 lexer preserves the exact indentation so the parser can later compute the
 strip amount required by `<<-`.
 
@@ -326,15 +329,22 @@ Only LF and CRLF are line breaks, as in HCL's scanner. A CR on its own is
 an `INVALID` token ("invalid character") outside strings and comments;
 inside a quoted string it is "invalid multi-line string" (§5.2), and it
 does not end a `#` or `//` comment, which runs on to the next LF.
-(`SourceFile` still counts a lone CR as a line end for positions and
-snippets, so a snippet of such a line stays readable.) A `/*` with no
-`*/` after it is not trivia: it and the rest of the file become one
-`INVALID` token ("unterminated comment").
+`SourceFile` counts lines the same way, so positions after a lone CR
+match Terraform's; an error snippet shows a lone CR as a space. A `/*`
+with no `*/` after it is not trivia: it and the rest of the file become
+one `INVALID` token ("unterminated comment").
 
-The lexer **suppresses** `NEWLINE`s inside `()` and `[]`, and inside the
-`${ }` and `%{ }` of a template, but not inside a `{}` opened within any
-of those, where they separate object items again (`"${ {a = 1\nb = 2}.a }"`
-is valid). Matching is tracked with a bracket stack. Each `${ }` / `%{ }`
+The lexer **suppresses** `NEWLINE`s inside `()` and `[]`, inside a `{}`
+that opens a for expression, and inside the `${ }` and `%{ }` of a
+template, but not inside an object's `{}` opened within any of those,
+where they separate object items again (`"${ {a = 1\nb = 2}.a }"` is
+valid). As in hclsyntax, line breaks are whitespace anywhere in a for
+expression: a `{` whose next tokens, past whitespace, line breaks and
+comments, are `for <name> [, <name>] in` opens one, unless it comes right
+after a block header (a name or a quoted label), which makes it a block
+body. One exception keeps line breaks significant: a `[*]` splat marker
+opened where they count, so `x[*\n]` is an error there, as in hclsyntax.
+Matching is tracked with a bracket stack. Each `${ }` / `%{ }`
 owns the brackets opened inside it: a stray `)` or `]` there cannot close
 a bracket opened outside it, and brackets it leaves open are dropped when
 it ends, so an error inside one does not change how later lines are read.
@@ -405,20 +415,26 @@ Unary      := ("-"|"!") Unary | Postfix
 Postfix    := Primary (GetAttr | Index | Splat)*
 GetAttr    := "." (IDENT | NUMBER)          -- NUMBER: legacy `a.0`
 Splat      := "." "*" GetAttr*              -- attribute-only splat
-           |  "[" "*" "]" (GetAttr | Index)*  -- full splat
+           |  "[" "*" "]" (GetAttr | Index | Splat)*  -- full splat
 Primary    := Literal | CollectionCtor | TemplateExpr | ForExpr
            |  FunctionCall | IDENT | "(" Expression ")"
 FunctionCall := IDENT ("::" IDENT)* "(" Arguments? ")"
 ```
 
-The splat rules are the HCL spec's. After `.*` only attribute names
-follow, so in `x.*.y[0]` the index applies to the splat's result (a
-traversal over the splat), and another `.*` inside it is an error
-("nested splat expression not allowed"). After `[*]` any names and
-indexes follow. A splat after a splat (`x[*].y[*].z`, `x.*[*]`) starts a
-new splat node whose source is the one before. A `.` followed by
-anything but a name is "invalid attribute name", and the token after the
-dot is left for the caller.
+Splats nest the way hclsyntax builds them. After `.*` only attribute
+names follow, so in `x.*.y[0]` the index applies to the splat's result
+(a traversal over the splat), a `[*]` after it (`x.*[*]`) is a full
+splat over it, and another `.*` inside it is an error ("nested splat
+expression not allowed"). A full splat `[*]` runs every later step on
+each element, later splats included: `x[*].y[*].z` is one splat over
+`x` whose element chain is `.y[*].z` (for
+`x = [{y = [{z = 1}, {z = 2}]}, {y = [{z = 3}]}]` that is
+`[[1, 2], [3]]`). The node keeps the attribute and index steps right
+after the `[*]` in `each`; when a later splat follows, `inner` holds the
+rest of the chain, built on a zero-width `SplatItem` node that stands for
+each element (hclsyntax's `AnonSymbolExpr`). A `.` followed by anything
+but a name is "invalid attribute name", and the token after the dot is
+left for the caller.
 
 An identifier followed by `(` or `::` always starts a call, even a
 keyword (`true(1)` is a call named `true`, as in HCL). The `::` form is a
@@ -445,8 +461,9 @@ type ExprNode =
   | ConditionalNode      // { kind: "conditional", cond, then, else }
   | BinaryOpNode         // { kind: "binary", op, left, right }
   | UnaryOpNode          // { kind: "unary", op, operand }
-  | SplatNode            // { kind: "splat", source, each: Step[], style: "attr" | "full" }
-                         //   "attr" steps are GetAttr only; see §6.2
+  | SplatNode            // { kind: "splat", source, each: Step[], style: "attr" | "full",
+                         //   inner: ExprNode | null }; see §6.2
+  | SplatItemNode        // { kind: "splat-item" }: each element inside a splat's `inner`
   | ParensNode;          // { kind: "parens", inner }
 ```
 

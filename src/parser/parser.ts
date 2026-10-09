@@ -519,6 +519,8 @@ export class Parser {
    * carries its own message, such as "invalid character", which says
    * more than `message`; it is reported once, however many rules trip
    * over it during recovery.
+   *
+   * @internal Used by the expression parser; not part of the public API.
    */
   errorAtToken(tok: Token, message: string): void {
     if (tok.kind === TokenKind.INVALID && tok.error !== undefined) {
