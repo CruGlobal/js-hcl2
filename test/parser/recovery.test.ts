@@ -52,6 +52,17 @@ describe("bail: false recovery always finishes", () => {
     expect(print(result.body)).toBe(input);
   });
 
+  it.each([
+    ["unclosed interpolation in a heredoc", "a = [<<EOT\n${&*/1"],
+    ["unclosed interpolation in a quoted string", 'a = "${=b:${"\n'],
+    ["if directive with no endif", 'a = "%{ if x }in"%{ endif }\n'],
+    ["for directive with no endfor", 'a = "%{ for v in vs }x"\nb = 1\n'],
+  ])("keeps unexpected tokens in a template body: %s", (_ctx, input) => {
+    const result = recover(input);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(print(result.body)).toBe(input);
+  });
+
   it("throws one aggregate error from parse() and parseDocument()", () => {
     for (const run of [
       () => parseValue("a = 1\n}\nb = 2\n", { bail: false }),
