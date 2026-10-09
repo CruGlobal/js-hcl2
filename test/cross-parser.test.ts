@@ -131,9 +131,7 @@ describe("cross-parser: hcl2-json-parser", () => {
 });
 
 // Quoted strings and heredoc bodies built from escape-heavy fragments, so
-// both parsers must agree on which backslash escapes are valid. A raw
-// newline is left out: js-hcl2 still accepts one inside a quoted string,
-// which HCL rejects.
+// both parsers must agree on which backslash escapes are valid.
 const ESCAPE_FRAGMENTS = [
   "\\",
   "\\",
@@ -168,13 +166,21 @@ const ESCAPE_FRAGMENTS = [
   "\t",
 ];
 
+// Raw line breaks for the quoted-string variant only. HCL rejects each of
+// them inside a quoted string ("Invalid multi-line string"). They stay out
+// of heredoc bodies, where a lone CR is its own question.
+const RAW_LINE_BREAKS = ["\n", "\r\n", "\r"];
+
 describe("property: escape handling agrees with hcl2-json-parser", () => {
-  const body = fc
-    .array(fc.constantFrom(...ESCAPE_FRAGMENTS), { minLength: 1, maxLength: 8 })
-    .map((parts) => parts.join(""));
+  const fragments = (pool: readonly string[]) =>
+    fc
+      .array(fc.constantFrom(...pool), { minLength: 1, maxLength: 8 })
+      .map((parts) => parts.join(""));
+  const quotedBody = fragments([...ESCAPE_FRAGMENTS, ...RAW_LINE_BREAKS]);
+  const heredocBody = fragments(ESCAPE_FRAGMENTS);
   const source = fc.oneof(
-    body.map((b) => `a = "${b}"\n`),
-    body.map((b) => `a = <<EOT\n${b}\nEOT\n`),
+    quotedBody.map((b) => `a = "${b}"\n`),
+    heredocBody.map((b) => `a = <<EOT\n${b}\nEOT\n`),
   );
 
   it("accepts and rejects the same strings over 300 generated inputs", async () => {

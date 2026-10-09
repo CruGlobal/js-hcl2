@@ -296,6 +296,61 @@ describe("invalid escape sequences in quoted strings", () => {
   });
 });
 
+describe("raw newlines in quoted strings", () => {
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it("reports the newline Terraform rejects, at the newline", () => {
+    const input = 'a = "abc\ndef"\n';
+    const errors = errorsOf(input);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.message).toMatch(/^invalid multi-line string/);
+    expect(errors[0]!.line).toBe(1);
+    expect(errors[0]!.column).toBe(input.indexOf("\n") + 1);
+  });
+
+  it("throws on a raw newline when bail is true (default)", () => {
+    expect(() => parse(new SourceFile('a = "x\ny"\n'))).toThrow(
+      /invalid multi-line string/,
+    );
+  });
+
+  it.each([
+    ["LF", 'a = "abc\ndef"\n'],
+    ["CRLF", 'a = "abc\r\ndef"\r\n'],
+    ["lone CR", 'a = "abc\rdef"\n'],
+    ["blank line", 'a = "abc\n\ndef"\n'],
+    ["only a newline", 'a = "\n"\n'],
+    ["after an interpolation", 'a = "${x}\ny"\n'],
+    ["between template directives", 'a = "%{ if x }\n%{ endif }"\n'],
+    ["block label", 'b "a\nb" {}\n'],
+    ["object key", 'a = { "k\nk" = 1 }\n'],
+    ["function argument", 'a = f("x\ny")\n'],
+    ["quoted string in a heredoc interpolation", 'a = <<EOT\n${"a\nb"}\nEOT\n'],
+  ])("reports a raw newline: %s", (_ctx, input) => {
+    expect(errorsOf(input).map((e) => e.message)).toEqual([
+      expect.stringMatching(/^invalid multi-line string/),
+    ]);
+  });
+
+  it.each([
+    ["interpolation", 'a = "${\nx\n}"\n'],
+    ["call inside an interpolation", 'a = "${foo(\n1,\n2)}"\n'],
+    ["if directive", 'a = "%{ if\nx }y%{ endif }"\n'],
+    ["heredoc body", "a = <<EOT\nx\n\ny\nEOT\n"],
+  ])("accepts newlines inside: %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+
+  it("keeps the CST lossless when recovering from a raw newline", () => {
+    const input = 'a = "x\ny"\nb "l\r\nm" {}\n';
+    const result = parse(new SourceFile(input), { bail: false });
+    expect(result.errors).toHaveLength(2);
+    expect(print(result.body)).toBe(input);
+  });
+});
+
 describe("identifiers that start with an underscore", () => {
   // bail: true, so a regression fails on the first error rather than
   // running `{ ... }` recovery on an INVALID token.

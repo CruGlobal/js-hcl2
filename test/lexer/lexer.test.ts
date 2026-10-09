@@ -534,15 +534,73 @@ describe("error recovery", () => {
     expect(last.kind).toBe(TokenKind.EOF);
   });
 
-  it("absorbs raw newlines into a quoted-string QUOTED_LIT (parser flags the error)", () => {
+  it("emits a raw newline in an unterminated quoted string as INVALID", () => {
     const ts = tokens('"abc\nrest');
-    expect(ts[0]?.kind).toBe(TokenKind.OQUOTE);
-    expect(ts[1]?.kind).toBe(TokenKind.QUOTED_LIT);
-    expect(ts[1]?.lexeme).toBe("abc\nrest");
+    expect(ts.map((t) => [t.kind, t.lexeme])).toEqual([
+      [TokenKind.OQUOTE, '"'],
+      [TokenKind.QUOTED_LIT, "abc"],
+      [TokenKind.INVALID, "\n"],
+      [TokenKind.QUOTED_LIT, "rest"],
+      [TokenKind.EOF, ""],
+    ]);
+    expect(ts[2]?.error).toMatch(/^invalid multi-line string/);
     // Unterminated template — last token is EOF with error.
     const last = ts[ts.length - 1]!;
     expect(last.kind).toBe(TokenKind.EOF);
     expect(last.error).toMatch(/unterminated/);
+  });
+});
+
+describe("raw newlines in quoted strings", () => {
+  function invalidTokens(input: string): Token[] {
+    return tokens(input).filter((t) => t.kind === TokenKind.INVALID);
+  }
+
+  it.each([
+    ["LF", "\n"],
+    ["CRLF", "\r\n"],
+    ["lone CR", "\r"],
+    ["a run of line breaks", "\n\r\n\r\n"],
+  ])("emits one INVALID token for %s", (_ctx, nl) => {
+    const input = `x = "a${nl}b"\n`;
+    const bad = invalidTokens(input);
+    expect(bad.map((t) => t.lexeme)).toEqual([nl]);
+    expect(bad[0]!.error).toMatch(/^invalid multi-line string/);
+    expect(bad[0]!.range.start.offset).toBe(input.indexOf(nl));
+    expectRejoin(input);
+  });
+
+  it("emits INVALID for a newline after an interpolation", () => {
+    const input = 'x = "${y}\nz"\n';
+    expect(invalidTokens(input).map((t) => t.lexeme)).toEqual(["\n"]);
+    expectRejoin(input);
+  });
+
+  it("emits INVALID for a newline between template directives", () => {
+    const input = 'x = "%{ if c }\n%{ endif }"\n';
+    expect(invalidTokens(input).map((t) => t.lexeme)).toEqual(["\n"]);
+    expectRejoin(input);
+  });
+
+  it("emits INVALID for a newline in a quoted block label", () => {
+    const input = 'b "l\nm" {}\n';
+    expect(invalidTokens(input).map((t) => t.lexeme)).toEqual(["\n"]);
+    expectRejoin(input);
+  });
+
+  it("emits INVALID for a quoted string nested in a heredoc interpolation", () => {
+    const input = 'x = <<EOT\n${"a\nb"}\nEOT\n';
+    expect(invalidTokens(input).map((t) => t.lexeme)).toEqual(["\n"]);
+    expectRejoin(input);
+  });
+
+  it("keeps newlines in heredoc bodies as literal text", () => {
+    expect(invalidTokens("x = <<EOT\na\n\nb\r\nEOT\n")).toEqual([]);
+  });
+
+  it("keeps newlines inside ${ } and %{ } as whitespace", () => {
+    expect(invalidTokens('x = "${\n  y\n}"\n')).toEqual([]);
+    expect(invalidTokens('x = "%{ if\nc }y%{ endif }"\n')).toEqual([]);
   });
 });
 
