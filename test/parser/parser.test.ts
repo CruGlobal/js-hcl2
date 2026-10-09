@@ -421,6 +421,62 @@ describe("a lone CR", () => {
   });
 });
 
+describe("template directives that do not balance", () => {
+  // Errors and positions from hashicorp/hcl (hclsyntax parser_template.go).
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  const missingEndif = (line: number, column: number) =>
+    `unexpected end of template: the if directive at line ${line}, column ${column} is missing its endif directive`;
+  const missingEndfor = (line: number, column: number) =>
+    `unexpected end of template: the for directive at line ${line}, column ${column} is missing its endfor directive`;
+
+  it.each([
+    ["an if at the closing quote", 'a = "%{ if x }in"\n', 1, 17, missingEndif(1, 6)],
+    ["an if with an else", 'a = "%{ if x }a%{ else }b"\n', 1, 26, missingEndif(1, 6)],
+    ["an empty if", 'a = "%{ if x }"\n', 1, 15, missingEndif(1, 6)],
+    ["the outer of two ifs", 'a = "%{ if x }%{ if y }a%{ endif }"\n', 1, 35, missingEndif(1, 6)],
+    ["an if before an interpolation", 'a = "%{ if x }${y}"\n', 1, 19, missingEndif(1, 6)],
+    ["a for", 'a = "%{ for v in vs }x"\n', 1, 23, missingEndfor(1, 6)],
+    ["an if in a heredoc", "a = <<EOT\n%{ if x }in\nEOT\n", 3, 1, missingEndif(2, 1)],
+  ])("stops %s at the end of the template", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors.map((e) => e.message)).toEqual([message]);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it.each([
+    ["an endif with no if", 'a = "%{ endif }"\n', 1, 6, /^unexpected endif directive: the control directives in this template are unbalanced/],
+    ["an else with no if", 'a = "%{ else }"\n', 1, 6, /^unexpected else directive: the control directives in this template are unbalanced/],
+    ["an endfor with no for", 'a = "%{ endfor }"\n', 1, 6, /^unexpected endfor directive: the control directives in this template are unbalanced/],
+    ["a stripped endif with no if", 'a = "%{~ endif ~}"\n', 1, 6, /^unexpected endif directive/],
+    ["an endfor that closes an if", 'a = "%{ if x }%{ endfor }"\n', 1, 15, /^unexpected endfor directive: expected an endif directive for the if at line 1, column 6/],
+    ["an endif that closes a for", 'a = "%{ for v in vs }%{ endif }"\n', 1, 22, /^unexpected endif directive: expected an endfor directive for the for at line 1, column 6/],
+    ["an else in a for", 'a = "%{ for v in vs }%{ else }%{ endfor }"\n', 1, 22, /^unexpected else directive: a for directive cannot have an else clause/],
+    ["a second else", 'a = "%{ if x }%{ else }%{ else }%{ endif }"\n', 1, 24, /^unexpected else directive: the if directive at line 1, column 6 already has an else clause/],
+  ])("rejects %s", (_ctx, input, line, column, message) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(message);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it("throws when bail is true (default)", () => {
+    expect(() => parse(new SourceFile('a = "%{ if x }in"\n'))).toThrow(
+      /^unexpected end of template/,
+    );
+  });
+
+  it.each([
+    ["an if and an else", 'a = "%{ if x }a%{ else }b%{ endif }"\n'],
+    ["an if in a for", 'a = "%{ for v in vs }%{ if v }x%{ endif }%{ endfor }"\n'],
+    ["strip markers on every marker", 'a = "%{~ if x ~}a%{~ else ~}b%{~ endif ~}"\n'],
+  ])("accepts %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
 describe("objects over several lines inside ${ } and %{ }", () => {
   it.each([
     ["in ${ }", 'a = "${ {a = 1\nb = 2}.a }"\n'],
