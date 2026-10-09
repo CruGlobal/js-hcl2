@@ -5,6 +5,13 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5](https://github.com/CruGlobal/js-hcl2/compare/v0.1.4...v0.1.5) (2026-10-09)
+
+
+### Fixed
+
+* match Terraform on statement endings, lone CR, splats and template directives ([#73](https://github.com/CruGlobal/js-hcl2/issues/73)) ([6a55ec5](https://github.com/CruGlobal/js-hcl2/commit/6a55ec55d9d36fdc9b6462d05a0469b5404056b3))
+
 ## [0.1.4](https://github.com/CruGlobal/js-hcl2/compare/v0.1.3...v0.1.4) (2026-10-09)
 
 
