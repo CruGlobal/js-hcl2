@@ -717,6 +717,41 @@ describe("a lone CR is not a line break", () => {
   });
 });
 
+describe("strip markers", () => {
+  // hashicorp/hcl reads `~` as a strip marker only right after `${` or
+  // `%{`, or right before a `}`. Anywhere else it is the bitwise NOT
+  // operator, which HCL does not support.
+  function marks(input: string): Array<[TokenKind, string]> {
+    return tokens(input)
+      .filter((t) => t.lexeme === "~")
+      .map((t) => [t.kind, t.lexeme]);
+  }
+
+  it.each([
+    ["after ${", 'a = "${~ x}"'],
+    ["before } in ${ }", 'a = "${x~}"'],
+    ["before } after a space", 'a = "${x ~}"'],
+    ["after %{", 'a = "%{~if x}a%{ endif }"'],
+    ["before } in an endif", 'a = "%{ if x }a%{ endif ~}"'],
+  ])("emits TEMPLATE_STRIP %s", (_ctx, input) => {
+    expect(marks(input)).toEqual([[TokenKind.TEMPLATE_STRIP, "~"]]);
+  });
+
+  it.each([
+    ["after a space in ${", 'a = "${ ~x }"'],
+    ["before a space in ${", 'a = "${ x~ }"'],
+    ["between spaces", 'a = "${ x ~ }"'],
+    ["after a space in %{", 'a = "%{ ~if x }a%{ endif }"'],
+    ["before a space in an endif", 'a = "%{ if x }a%{ endif~ }"'],
+    ["outside a template", "a = ~1"],
+  ])("emits INVALID %s", (_ctx, input) => {
+    expect(marks(input)).toEqual([[TokenKind.INVALID, "~"]]);
+    const bad = tokens(input).find((t) => t.kind === TokenKind.INVALID)!;
+    expect(bad.error).toMatch(/^unsupported operator/);
+    expectRejoin(input);
+  });
+});
+
 describe("an unterminated /* comment", () => {
   it.each([
     ["alone", "/* abc", "/* abc"],

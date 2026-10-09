@@ -421,6 +421,43 @@ describe("a lone CR", () => {
   });
 });
 
+describe("strip markers out of place", () => {
+  // hashicorp/hcl reports "Unsupported operator" for a `~` that does not
+  // touch the `${`, `%{` or closing `}`.
+  function errorsOf(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  it.each([
+    ["in an endif", 'a = "%{ if x }a%{ endif~ }"\n', 1, 24],
+    ["in an else", 'a = "%{ if x }a%{ else~ }b%{ endif }"\n', 1, 23],
+    ["in an endfor", 'a = "%{ for v in vs }a%{ endfor~ }"\n', 1, 32],
+    ["after an if condition", 'a = "%{ if x~ }a%{ endif }"\n', 1, 13],
+    ["between spaces after an if condition", 'a = "%{ if x ~ }a%{ endif }"\n', 1, 14],
+    ["after a for collection", 'a = "%{ for v in vs~ }a%{ endfor }"\n', 1, 20],
+    ["before a directive keyword", 'a = "%{ ~if x }a%{ endif }"\n', 1, 9],
+    ["after an interpolated value", 'a = "${ x~ }"\n', 1, 10],
+    ["between spaces in an interpolation", 'a = "${ x ~ }"\n', 1, 11],
+    ["before an interpolated value", 'a = "${ ~x }"\n', 1, 9],
+    ["outside a template", "a = ~1\n", 1, 5],
+  ])("reports %s", (_ctx, input, line, column) => {
+    const errors = errorsOf(input);
+    expect(errors[0]!.message).toMatch(/^unsupported operator/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it.each([
+    ["on both sides of an interpolation", 'a = "${~ x ~}"\n'],
+    ["with no spaces", 'a = "${~x~}"\n'],
+    ["on every if marker", 'a = "%{~ if x ~}a%{~ else ~}b%{~ endif ~}"\n'],
+    ["on every for marker", 'a = "%{~for v in vs~}a%{~endfor~}"\n'],
+    ["in a heredoc", "a = <<EOT\n%{~ if x ~}\na\n%{~ endif ~}\nEOT\n"],
+  ])("accepts strip markers %s", (_ctx, input) => {
+    expectRoundTrip(input);
+  });
+});
+
 describe("an unterminated /* comment", () => {
   // hashicorp/hcl rejects these too (it reads the `/` and `*` as
   // operators); the error here says what is wrong.
