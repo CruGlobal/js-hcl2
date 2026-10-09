@@ -294,6 +294,40 @@ describe("block grouping — 3 labels", () => {
   });
 });
 
+describe("block labels are decoded", () => {
+  it.each([
+    ["a \\u escape", 'b "\\u00e9" {}\n', "é"],
+    ["a \\U escape", 'b "\\U0001F389" {}\n', "🎉"],
+    ["a quote and a backslash", 'b "a\\"b\\\\c" {}\n', 'a"b\\c'],
+    ["\\n, \\r and \\t", 'b "x\\ny\\rz\\t" {}\n', "x\ny\rz\t"],
+    ["doubled template markers", 'b "$${x} %%{y}" {}\n', "${x} %{y}"],
+  ])("reads a label written with %s as Terraform does", (_ctx, input, label) => {
+    expect(parseOK(input)).toEqual({ b: { [label]: {} } });
+  });
+
+  it("decodes every label of a block", () => {
+    expect(parseOK('r "\\u0074" "n\\u0031" {\n  x = 1\n}\n')).toEqual({
+      r: { t: { n1: { x: 1 } } },
+    });
+  });
+
+  it("groups blocks whose labels decode to the same text", () => {
+    expect(parseOK('p "\\u00e9" { x = 1 }\np "é" { x = 2 }\n')).toEqual({
+      p: { é: [{ x: 1 }, { x: 2 }] },
+    });
+  });
+
+  it("agrees with parseDocument().toValue()", () => {
+    const src = 'r "\\u00e9" "$${x}" {\n  k = 1\n}\n';
+    expect(HCL.parseDocument(src).toValue()).toEqual(parse(src));
+  });
+
+  it("round-trips labels that need escapes through stringify", () => {
+    const value = { b: { 'a"b\\c\n\t${x}%{y}é😀\u0001': { k: 1 } } };
+    expect(parse(HCL.stringify(value))).toEqual(value);
+  });
+});
+
 describe("block grouping — mixed unique/duplicate", () => {
   it("three duplicates collect into a 3-element array", () => {
     const v = parseOK(

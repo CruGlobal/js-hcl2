@@ -103,6 +103,17 @@ describe("blocks", () => {
     expect(blk.body.attributes).toHaveLength(1);
   });
 
+  it("stores a quoted label's decoded text and keeps its source", () => {
+    const input = 'b "\\u00e9\\"" "$${x}" bare {}\n';
+    const { body } = parseOK(input);
+    expect(body.blocks[0]!.labels!.labels).toEqual([
+      { value: 'é"', quoted: true },
+      { value: "${x}", quoted: true },
+      { value: "bare", quoted: false },
+    ]);
+    expect(print(body)).toBe(input);
+  });
+
   it("parses a block with one string label", () => {
     const { body } = parseOK('module "m" {\n  source = "./m"\n}\n');
     const blk = body.blocks[0]!;

@@ -177,3 +177,26 @@ describe("property: stringify handles primitive tuples", () => {
     );
   });
 });
+
+/** Label text built from fragments that need escaping in a quoted label. */
+const escapedLabel = fc
+  .array(
+    fc.constantFrom(
+      "a", "Z", " ", '"', "\\", "\n", "\r", "\t", "\u0001",
+      "$", "%", "{", "}", "${", "%{", "$${", "é", "😀",
+    ),
+    { minLength: 1, maxLength: 8 },
+  )
+  .map((parts) => parts.join(""));
+
+describe("property: block labels that need escapes round-trip", () => {
+  it(`holds over ${RUNS_SMALL} generated label pairs`, () => {
+    fc.assert(
+      fc.property(identKey, escapedLabel, escapedLabel, (type, l1, l2) => {
+        const body = { [type]: { [l1]: { [l2]: { k: 1 } } } };
+        expect(parse(stringify(body))).toEqual(body);
+      }),
+      { numRuns: RUNS_SMALL },
+    );
+  });
+});

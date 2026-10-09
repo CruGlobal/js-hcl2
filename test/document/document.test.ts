@@ -110,6 +110,15 @@ describe("Document.get", () => {
     expect(first).not.toBe(second);
   });
 
+  it("matches block labels by their decoded text", () => {
+    const src = 'b "\\u00e9" "$${x}" {\n  k = 1\n}\n';
+    const doc = parseDocument(src);
+    expect(doc.get(["b", "é", "${x}"])?.kind).toBe("Block");
+    expect(doc.get(["b", "é", "${x}", "k"])?.kind).toBe("Attribute");
+    expect(doc.get(["b", "\\u00e9", "$${x}", "k"])).toBeUndefined();
+    expect(doc.toString()).toBe(src);
+  });
+
   it("string path also interprets digit-only segments as indices", () => {
     const doc = parseDocument(
       'p "a" { x = 1 }\np "a" { x = 2 }\n',
