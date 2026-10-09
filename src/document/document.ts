@@ -138,13 +138,17 @@ export class Document {
     if (typeof newName !== "string") {
       throw new Error("new attribute name must be a string");
     }
-    const parent = parentSegs.length === 0
-      ? this.body
-      : parentBodyFor(this.body, parentSegs);
-    if (!parent) {
-      throw new Error(`set() could not locate parent body for path ${JSON.stringify(segs)}`);
+    let block: BlockNode | null = null;
+    if (parentSegs.length > 0) {
+      block = parentBlockFor(this.body, parentSegs) ?? null;
+      if (!block) {
+        throw new Error(`set() could not locate parent body for path ${JSON.stringify(segs)}`);
+      }
     }
-    insertAttribute(parent, newName, value);
+    // Inserted line breaks match the file's: CRLF if its first line
+    // break is CRLF, LF otherwise.
+    const newline = /\r?\n/.exec(this.source.text)?.[0] ?? "\n";
+    insertAttribute(block?.body ?? this.body, block, newName, value, newline);
   }
 
   /**
@@ -297,19 +301,17 @@ function resolveBlock(
 }
 
 /**
- * Find the BodyNode that WOULD contain an attribute whose key is the
- * last segment of `parentSegs`. Used by set() when the path does not
+ * Find the block whose body WOULD contain an attribute whose key is the
+ * last segment of the full path. Used by set() when the path does not
  * currently resolve. Creates no new structure — returns undefined if
- * the parent body itself can't be located.
+ * `parentSegs` does not name a block.
  */
-function parentBodyFor(
+function parentBlockFor(
   rootBody: BodyNode,
   parentSegs: PathSegment[],
-): BodyNode | undefined {
-  if (parentSegs.length === 0) return rootBody;
+): BlockNode | undefined {
   const resolved = resolve(rootBody, parentSegs);
-  if (!resolved) return undefined;
-  if (resolved.node.kind === "Block") return resolved.node.body;
+  if (resolved && isBlock(resolved.node)) return resolved.node;
   return undefined;
 }
 
@@ -394,17 +396,57 @@ function parseExpressionStandalone(text: string): ExprNode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Append a new attribute to the end of `body`. Indentation is copied
- * from the body's existing attributes; if none exist, the default is
- * two spaces of parent indent. The new entry is preceded by a NEWLINE
- * so it does not merge with the previous statement.
+ * Append a new attribute to the end of `body`, which is `block`'s body
+ * or (when `block` is null) the document root. Indentation is copied
+ * from the body's existing statements; if none exist, it is one level
+ * past the block's own line. The new entry is preceded by a NEWLINE so
+ * it does not merge with the previous statement.
+ *
+ * A block that opens and closes on one line (`b {}`, `b { a = 1 }`) is
+ * split over lines first: HCL allows at most one argument in a one-line
+ * block, and only when it closes on that line.
  */
 function insertAttribute(
   body: BodyNode,
+  block: BlockNode | null,
   name: string,
   value: Value,
+  newline: string,
 ): void {
-  const indentTrivia = detectBodyIndent(body);
+  const parts = body.parts as unknown as (AttributeNode | BlockNode | Token)[];
+  const existingIndent = detectBodyIndent(body);
+  let indentTrivia = existingIndent ?? "";
+  // Set when the block's `}` shares a line with its `{` or its last
+  // statement and so has to move to a line of its own.
+  let closing: { rbrace: Token; indent: string } | null = null;
+
+  if (block) {
+    const bodyIdx = block.parts.indexOf(body);
+    const lbrace = block.parts[bodyIdx - 1] as Token;
+    const rbrace = block.parts[bodyIdx + 1] as Token;
+    const blockIndent = lineIndent(firstToken(block));
+    const innerIndent = blockIndent + (blockIndent.endsWith("\t") ? "\t" : "  ");
+    if (!isNewline(parts[parts.length - 1])) {
+      closing = { rbrace, indent: blockIndent };
+    }
+    indentTrivia = existingIndent ?? innerIndent;
+    if (!isNewline(parts[0])) {
+      // The body starts on the `{` line: break the line after `{` and
+      // indent the statement (if any) that was on it.
+      mutateToken(lbrace, { trailingTrivia: trimEndBlanks(lbrace.trailingTrivia) });
+      parts.unshift(makeNewlineToken(newline));
+      const moved = parts[1] && isNode(parts[1]) ? firstToken(parts[1]) : undefined;
+      if (moved) {
+        mutateToken(moved, {
+          leadingTrivia: innerIndent + moved.leadingTrivia.replace(/^[ \t]+/, ""),
+        });
+      }
+      // A one-line block holds at most that one statement, so the new
+      // one goes at the indent just given to it.
+      indentTrivia = innerIndent;
+    }
+  }
+
   // Build the attribute source directly: `name = <expr>`. Using
   // stringifyExpression keeps object-typed values as object literals
   // rather than letting the body-level block-vs-attribute policy kick
@@ -424,17 +466,31 @@ function insertAttribute(
   const first = firstToken(newAttr);
   if (first) mutateToken(first, { leadingTrivia: indentTrivia });
 
-  const parts = body.parts as unknown as (AttributeNode | BlockNode | Token)[];
-  // If the body does not already end with a NEWLINE (rare — only for
-  // bodies that ended with a statement token without trailing newline),
-  // insert one first. Otherwise append directly, followed by a fresh
-  // NEWLINE so subsequent inserts behave identically.
+  // If the body does not already end with a NEWLINE (a file with no
+  // final line break, or a one-line block's argument), insert one first.
+  // Otherwise append directly, followed by a fresh NEWLINE so
+  // subsequent inserts behave identically.
   const { insertAt, needsLeadingNewline } = findAppendInsertion(parts);
   const additions: (AttributeNode | BlockNode | Token)[] = [];
-  if (needsLeadingNewline) additions.push(makeNewlineToken());
+  if (needsLeadingNewline) {
+    const prev = lastToken(parts[insertAt - 1]!);
+    // The blanks before a one-line block's `}` would be left at the end
+    // of the line.
+    if (closing && prev) {
+      mutateToken(prev, { trailingTrivia: trimEndBlanks(prev.trailingTrivia) });
+    }
+    additions.push(makeNewlineToken(newline));
+  }
   additions.push(newAttr);
-  additions.push(makeNewlineToken());
+  additions.push(makeNewlineToken(newline));
   parts.splice(insertAt, 0, ...additions);
+
+  if (closing) {
+    const { rbrace, indent } = closing;
+    mutateToken(rbrace, {
+      leadingTrivia: indent + rbrace.leadingTrivia.replace(/^[ \t]+/, ""),
+    });
+  }
 }
 
 /**
@@ -463,7 +519,15 @@ function isNode(x: unknown): x is AttributeNode | BlockNode {
   return typeof x === "object" && x !== null && !("lexeme" in x);
 }
 
-function detectBodyIndent(body: BodyNode): string {
+function isNewline(x: unknown): boolean {
+  return isTokenLike(x) && x.kind === TokenKind.NEWLINE;
+}
+
+/**
+ * Indentation of the body's first statement, or undefined when the body
+ * has none.
+ */
+function detectBodyIndent(body: BodyNode): string | undefined {
   for (const part of body.parts) {
     if (isAttribute(part) || isBlock(part)) {
       const first = firstToken(part);
@@ -474,21 +538,38 @@ function detectBodyIndent(body: BodyNode): string {
       }
     }
   }
-  return "";
+  return undefined;
 }
 
-function makeNewlineToken(): Token {
+/**
+ * The blanks at the start of the line `tok` is on. A statement's first
+ * token follows a NEWLINE token (or starts the file), so its leading
+ * trivia starts at the beginning of a line, unless a block comment in
+ * it spans lines.
+ */
+function lineIndent(tok: Token | undefined): string {
+  if (!tok) return "";
+  const trivia = tok.leadingTrivia;
+  const lineStart = trivia.lastIndexOf("\n") + 1;
+  return /^[ \t]*/.exec(trivia.slice(lineStart))![0];
+}
+
+function trimEndBlanks(s: string): string {
+  return s.replace(/[ \t]+$/, "");
+}
+
+function makeNewlineToken(lexeme: string): Token {
   // A synthetic NEWLINE used for inserted separators. It carries no
   // trivia of its own — any leading / trailing context belongs to
   // adjacent real tokens.
   return {
     kind: TokenKind.NEWLINE,
-    lexeme: "\n",
+    lexeme,
     leadingTrivia: "",
     trailingTrivia: "",
     range: {
       start: { line: 0, column: 0, offset: 0 },
-      end: { line: 0, column: 0, offset: 1 },
+      end: { line: 0, column: 0, offset: lexeme.length },
     },
   };
 }
