@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { lex } from "../../src/lexer/lexer.js";
 import { TokenKind } from "../../src/lexer/token.js";
 import type { Token } from "../../src/lexer/token.js";
-import { parseExpr } from "../../src/parser/parser.js";
+import { parse, parseExpr } from "../../src/parser/parser.js";
 import { print } from "../../src/parser/print.js";
 import { SourceFile } from "../../src/source.js";
 import type { ExprNode } from "../../src/parser/nodes.js";
@@ -268,6 +268,75 @@ describe("splats", () => {
     const expr = expectNoErrors("a.*");
     expect(expr.kind).toBe("Splat");
     if (expr.kind === "Splat") expect(expr.each).toEqual([]);
+  });
+});
+
+describe("splat steps", () => {
+  // Accept/reject decisions match hashicorp/hcl v2.24.0. The node shapes
+  // follow the HCL spec grammar: `attrSplat = "." "*" GetAttr*`, so an
+  // index after `.*` applies to the splat's result, and a splat after a
+  // splat (`ExprTerm Splat`) wraps the one before it.
+  function errorsIn(input: string) {
+    return parse(new SourceFile(input), { bail: false }).errors;
+  }
+
+  /** A compact picture of an expression's splat / traversal structure. */
+  function shape(e: ExprNode): string {
+    const step = (s: { kind: string; name?: string }) =>
+      s.kind === "GetAttr" ? `.${s.name}` : "[i]";
+    if (e.kind === "Splat") {
+      return `${e.style}(${shape(e.source)})<${e.each.map(step).join("")}>`;
+    }
+    if (e.kind === "Traversal") return `${shape(e.source)}${e.steps.map(step).join("")}`;
+    if (e.kind === "Variable") return e.name;
+    return e.kind;
+  }
+
+  it.each([
+    ["'=' after [*].", "a = x[*].=\n", 1, 10],
+    ["'-' after [*].", "a = x[*].-\n", 1, 10],
+    ["'}' after [*].", "a = x[*].}\n", 1, 10],
+    ["'?' after .*.", "a = x.*.?\n", 1, 9],
+    ["a line break after [*].", "a = x[*].\n", 1, 10],
+    ["a line break after .*.", "a = x.*.\n", 1, 9],
+    ["the end of the file after [*].", "a = x[*].", 1, 10],
+    ["the end of the file after .*.", "a = x.*.", 1, 9],
+  ])("rejects %s: invalid attribute name", (_ctx, input, line, column) => {
+    const errors = errorsIn(input);
+    expect(errors[0]!.message).toMatch(/^invalid attribute name/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+    expect(print(parse(new SourceFile(input), { bail: false }).body)).toBe(input);
+  });
+
+  it.each([
+    ["x.*.*", "a = x.*.*\n", 1, 9],
+    ["x.*.y.*", "a = x.*.y.*\n", 1, 11],
+    ["x[*].*.*", "a = x[*].*.*\n", 1, 12],
+  ])("rejects a splat inside an attribute-only splat: %s", (_ctx, input, line, column) => {
+    const errors = errorsIn(input);
+    expect(errors[0]!.message).toMatch(/^nested splat expression not allowed/);
+    expect([errors[0]!.line, errors[0]!.column]).toEqual([line, column]);
+  });
+
+  it.each([
+    ["x[*].y[*].z", "full(full(x)<.y>)<.z>"],
+    ["x[*][*]", "full(full(x)<>)<>"],
+    ["x[*].y[0][*]", "full(full(x)<.y[i]>)<>"],
+    ["x.*[*]", "full(attr(x)<>)<>"],
+    ["x.*.y[*]", "full(attr(x)<.y>)<>"],
+    ["x[*].*", "attr(full(x)<>)<>"],
+    ["x[*].*[*]", "full(attr(full(x)<>)<>)<>"],
+    ["x[*].y.*.z", "attr(full(x)<.y>)<.z>"],
+    ["x.*.y[0]", "attr(x)<.y>[i]"],
+    ["x.*.y[0].*", "attr(attr(x)<.y>[i])<>"],
+    ["x.*[0].y", "attr(x)<>[i].y"],
+    ["x[*].y[0]", "full(x)<.y[i]>"],
+    ["x[*].0", "full(x)<.0>"],
+    ["x.*.0", "attr(x)<.0>"],
+    ["x.*.y.0.z", "attr(x)<.y.0.z>"],
+  ])("accepts %s", (input, expected) => {
+    expect(shape(expectNoErrors(input))).toBe(expected);
+    expectRoundTripTokens(input);
   });
 });
 

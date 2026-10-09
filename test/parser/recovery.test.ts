@@ -76,6 +76,16 @@ describe("bail: false recovery always finishes", () => {
     expect(print(result.body)).toBe(input);
   });
 
+  it.each([
+    ["a dot at the end of a line", "a = x-1 + 2 * (3 - x[0].y[*].\n"],
+    ["a dot at the end of the file", "a = x[*]."],
+    ["a dot then a closing brace", "b {\n  a = x[*].}\n"],
+  ])("does not reuse the token after a splat's dot: %s", (_ctx, input) => {
+    const result = recover(input);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(print(result.body)).toBe(input);
+  });
+
   it("throws one aggregate error from parse() and parseDocument()", () => {
     for (const run of [
       () => parseValue("a = 1\n}\nb = 2\n", { bail: false }),
