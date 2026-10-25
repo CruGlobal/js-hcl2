@@ -558,8 +558,20 @@ By construction, `print(parseDocument(s).root) === s`.
   (same-line comments).
 - If `path` does not exist, insert a new `AttributeNode` at the end of the
   enclosing body, with indentation matching the body's first existing
-  attribute (or a default of two spaces if the body is empty). A newline is
-  inserted before it so it does not fuse with the preceding token.
+  statement. In an empty block body it is one level past the block's own
+  line: two spaces, or a tab when that line's indent ends in a tab. A
+  newline is inserted before it so it does not fuse with the preceding
+  token. The line breaks around the new argument are CRLF when the
+  file's first line break is, LF otherwise. A multi-line value's own
+  line breaks (a long list or object, a heredoc) are always LF.
+- A block that opens and closes on one line (`b {}`, `b { a = 1 }`) can
+  hold only that one argument, so inserting into it first splits it the
+  way `terraform fmt` writes a block: a line break after `{`, the existing
+  argument on its own line, and `}` on its own line at the block's indent.
+  The blanks that padded the braces go; comments stay where they were.
+  Replacing the value of a one-line block's argument leaves it on one
+  line, unless the new value prints as a heredoc: a heredoc's closing
+  marker has to end its line, so the block is split the same way.
 - `delete(path)` removes the node *and* its leading trivia up to (but not
   including) the preceding newline, so deleting the second attribute of
   three does not leave a blank gap.
