@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import HCL, { parseDocument } from "../../src/index.js";
-import type { Document } from "../../src/index.js";
+import type { Document, PathSegment } from "../../src/index.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Round-trip: byte-identical toString for every parseable corpus file
@@ -222,12 +222,305 @@ describe("Document.set — insertion of new attributes", () => {
   it("appends with 2-space indent when the body has no existing attrs", () => {
     const input = "block {\n}\n";
     const out = edited(input, (d) => d.set(["block", "x"], 1));
-    // No existing sibling to copy indent from → zero indent. Still a
-    // valid parse, just flat.
-    expect(out).toContain("x = 1");
+    // No sibling to copy the indent from: one level past the block's own.
+    expect(out).toBe("block {\n  x = 1\n}\n");
     const parsed = HCL.parse(out);
     expect(parsed).toEqual({ block: { x: 1 } });
   });
+});
+
+// A block that opens and closes on one line (`b {}`, `b { a = 1 }`) holds
+// at most one argument, and HCL needs a line break after its `{` before
+// anything else can go in. Inserting into one has to split it over lines,
+// fmt-style, without touching any other byte of the file.
+describe("Document.set: insertion into empty and one-line blocks", () => {
+  interface Case {
+    name: string;
+    input: string;
+    mutate: (d: Document) => void;
+    expected: string;
+  }
+  const setC = (path: PathSegment[]) => (d: Document) => d.set(path, 2);
+  const CASES: Case[] = [
+    {
+      name: "empty block `b {}`",
+      input: "b {}\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  c = 2\n}\n",
+    },
+    {
+      name: "empty block with a space `b { }`",
+      input: "b { }\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  c = 2\n}\n",
+    },
+    {
+      name: "one-line block `b { a = 1 }`",
+      input: "b { a = 1 }\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  a = 1\n  c = 2\n}\n",
+    },
+    {
+      name: "one-line block without spaces `b {a = 1}`",
+      input: "b {a = 1}\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  a = 1\n  c = 2\n}\n",
+    },
+    {
+      name: "empty multi-line block with a blank line",
+      input: "b {\n\n}\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n\n  c = 2\n}\n",
+    },
+    {
+      name: "empty block with labels",
+      input: 'resource "t" "n" {}\n',
+      mutate: setC(["resource", "t", "n", "c"]),
+      expected: 'resource "t" "n" {\n  c = 2\n}\n',
+    },
+    {
+      name: "one-line block with labels",
+      input: 'resource "t" "n" { a = 1 }\n',
+      mutate: (d) => d.set(["resource", "t", "n", "c"], "x"),
+      expected: 'resource "t" "n" {\n  a = 1\n  c = "x"\n}\n',
+    },
+    {
+      name: "nested empty block",
+      input: "a {\n  b {}\n}\n",
+      mutate: setC(["a", "b", "c"]),
+      expected: "a {\n  b {\n    c = 2\n  }\n}\n",
+    },
+    {
+      name: "nested one-line block",
+      input: "a {\n  b { x = 1 }\n}\n",
+      mutate: setC(["a", "b", "c"]),
+      expected: "a {\n  b {\n    x = 1\n    c = 2\n  }\n}\n",
+    },
+    {
+      name: "empty block three levels down",
+      input: "a {\n  b {\n    d {}\n  }\n}\n",
+      mutate: (d) => d.set(["a", "b", "d", "c"], true),
+      expected: "a {\n  b {\n    d {\n      c = true\n    }\n  }\n}\n",
+    },
+    {
+      name: "CRLF: one-line block",
+      input: "x = 1\r\nb { a = 1 }\r\n",
+      mutate: setC(["b", "c"]),
+      expected: "x = 1\r\nb {\r\n  a = 1\r\n  c = 2\r\n}\r\n",
+    },
+    {
+      name: "CRLF: empty block",
+      input: "b {}\r\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\r\n  c = 2\r\n}\r\n",
+    },
+    {
+      name: "CRLF: multi-line block",
+      input: "b {\r\n  a = 1\r\n}\r\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\r\n  a = 1\r\n  c = 2\r\n}\r\n",
+    },
+    {
+      name: "CRLF: top level",
+      input: "a = 1\r\n",
+      mutate: setC(["c"]),
+      expected: "a = 1\r\nc = 2\r\n",
+    },
+    {
+      name: "line comment after `{`",
+      input: "b { # note\n}\n",
+      mutate: setC(["b", "c"]),
+      expected: "b { # note\n  c = 2\n}\n",
+    },
+    {
+      name: "block comment after `{` in an empty block",
+      input: "b { /* note */ }\n",
+      mutate: setC(["b", "c"]),
+      expected: "b { /* note */\n  c = 2\n}\n",
+    },
+    {
+      name: "block comments inside a one-line block",
+      input: "b { /* n */ a = 1 /* m */ }\n",
+      mutate: setC(["b", "c"]),
+      expected: "b { /* n */\n  a = 1 /* m */\n  c = 2\n}\n",
+    },
+    {
+      name: "block comment over two lines inside a one-line block",
+      input: "b {/* x\ny */ a = 1}\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  /* x\ny */ a = 1\n  c = 2\n}\n",
+    },
+    {
+      name: "comment after the closing `}`",
+      input: "b { a = 1 } # tail\n",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  a = 1\n  c = 2\n} # tail\n",
+    },
+    {
+      name: "tab indent: nested empty block",
+      input: "a {\n\tb {}\n}\n",
+      mutate: setC(["a", "b", "c"]),
+      expected: "a {\n\tb {\n\t\tc = 2\n\t}\n}\n",
+    },
+    {
+      name: "tab indent: nested one-line block",
+      input: "a {\n\tb { x = 1 }\n}\n",
+      mutate: setC(["a", "b", "c"]),
+      expected: "a {\n\tb {\n\t\tx = 1\n\t\tc = 2\n\t}\n}\n",
+    },
+    {
+      name: "tab indent: nested empty multi-line block",
+      input: "a {\n\tb {\n\t}\n}\n",
+      mutate: setC(["a", "b", "c"]),
+      expected: "a {\n\tb {\n\t\tc = 2\n\t}\n}\n",
+    },
+    {
+      name: "delete the only argument of a one-line block, then set",
+      input: "b { a = 1 }\n",
+      mutate: (d) => {
+        d.delete(["b", "a"]);
+        d.set(["b", "c"], 2);
+      },
+      expected: "b {\n  c = 2\n}\n",
+    },
+    {
+      name: "delete the only argument of a multi-line block, then set",
+      input: "b {\n  a = 1\n}\n",
+      mutate: (d) => {
+        d.delete(["b", "a"]);
+        d.set(["b", "c"], 2);
+      },
+      expected: "b {\n  c = 2\n}\n",
+    },
+    {
+      name: "two inserts into an empty block",
+      input: "b {}\n",
+      mutate: (d) => {
+        d.set(["b", "c"], 2);
+        d.set(["b", "e"], 3);
+      },
+      expected: "b {\n  c = 2\n  e = 3\n}\n",
+    },
+    {
+      name: "empty block at the end of a file with no final newline",
+      input: "b {}",
+      mutate: setC(["b", "c"]),
+      expected: "b {\n  c = 2\n}",
+    },
+    {
+      name: "sibling blocks and attributes are left alone",
+      input: "x = 1\nb {}\ny {}\n",
+      mutate: setC(["b", "c"]),
+      expected: "x = 1\nb {\n  c = 2\n}\ny {}\n",
+    },
+    {
+      name: "second block of a duplicate group",
+      input: "b {}\nb { a = 1 }\n",
+      mutate: setC(["b", 1, "c"]),
+      expected: "b {}\nb {\n  a = 1\n  c = 2\n}\n",
+    },
+    {
+      name: "object value into an empty block",
+      input: "b {}\n",
+      mutate: (d) => d.set(["b", "tags"], { env: "dev" }),
+      expected: 'b {\n  tags = { env = "dev" }\n}\n',
+    },
+    {
+      name: "replacing the argument of a one-line block keeps it on one line",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], 5),
+      expected: "b { a = 5 }\n",
+    },
+  ];
+  for (const c of CASES) {
+    it(c.name, () => {
+      const out = edited(c.input, c.mutate);
+      // The library can read back what it wrote: it follows Terraform's
+      // rules for where line breaks go.
+      expect(parseDocument(out).toString()).toBe(out);
+      expect(out).toBe(c.expected);
+    });
+  }
+});
+
+// A heredoc's closing marker has to end its line, so a one-line block
+// can't hold one. Giving a one-line block's argument a value that prints
+// as a heredoc splits the block the same way an insert does.
+describe("Document.set: heredoc value for a one-line block's argument", () => {
+  const LINES = "l1\nl2\nl3\nl4\n";
+  const HEREDOC = "<<EOT\nl1\nl2\nl3\nl4\nEOT";
+  const LONG = "x".repeat(90);
+  const CASES: Array<{
+    name: string;
+    input: string;
+    mutate: (d: Document) => void;
+    expected: string;
+  }> = [
+    {
+      name: "one-line block",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "one-line block without spaces",
+      input: "b {a = 1}\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "a string over 80 characters ending in a line break",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], `${LONG}\n`),
+      expected: `b {\n  a = <<EOT\n${LONG}\nEOT\n}\n`,
+    },
+    {
+      name: "comment after the closing `}`",
+      input: "b { a = 1 } # tail\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n} # tail\n`,
+    },
+    {
+      name: "block with labels",
+      input: 'resource "t" "n" { a = 1 }\n',
+      mutate: (d) => d.set(["resource", "t", "n", "a"], LINES),
+      expected: `resource "t" "n" {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "nested one-line block",
+      input: "a {\n  b { x = 1 }\n}\n",
+      mutate: (d) => d.set(["a", "b", "x"], LINES),
+      expected: `a {\n  b {\n    x = ${HEREDOC}\n  }\n}\n`,
+    },
+    {
+      name: "then a new argument",
+      input: "b { a = 1 }\n",
+      mutate: (d) => {
+        d.set(["b", "a"], LINES);
+        d.set(["b", "c"], 2);
+      },
+      expected: `b {\n  a = ${HEREDOC}\n  c = 2\n}\n`,
+    },
+    {
+      name: "a multi-line block is left as it is",
+      input: "b {\n  a = 1\n}\n",
+      mutate: (d) => d.set(["b", "a"], LINES),
+      expected: `b {\n  a = ${HEREDOC}\n}\n`,
+    },
+    {
+      name: "a value that stays quoted keeps the block on one line",
+      input: "b { a = 1 }\n",
+      mutate: (d) => d.set(["b", "a"], "l1\nl2"),
+      expected: 'b { a = "l1\\nl2" }\n',
+    },
+  ];
+  for (const c of CASES) {
+    it(c.name, () => {
+      const out = edited(c.input, c.mutate);
+      expect(parseDocument(out).toString()).toBe(out);
+      expect(out).toBe(c.expected);
+    });
+  }
 });
 
 describe("Document.delete", () => {
