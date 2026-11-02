@@ -5,6 +5,27 @@ All notable changes to `@cruglobal/js-hcl2` will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/CruGlobal/js-hcl2/compare/v0.1.5...v0.1.6) (2026-11-02)
+
+
+### Fixed
+
+* split one-line blocks when Document.set writes into them ([#77](https://github.com/CruGlobal/js-hcl2/issues/77)) ([97c3b18](https://github.com/CruGlobal/js-hcl2/commit/97c3b18ebdc4d0e14e9fe0467bca1daf6796c1d9))
+* write quoted-key objects as attributes and keep one-item lists in stringify ([#75](https://github.com/CruGlobal/js-hcl2/issues/75)) ([58df8eb](https://github.com/CruGlobal/js-hcl2/commit/58df8eb886f35e433ccb7d9b456ed2cbba2d2801))
+
+
+### Changed
+
+* **deps-dev:** Bump happy-dom from 20.14.5 to 21.0.4 ([9e009b1](https://github.com/CruGlobal/js-hcl2/commit/9e009b1d3629a6a7a5029466be24b250d6d6dedc))
+* **deps-dev:** Bump markdown-it from 14.3.2 to 14.3.3 ([#85](https://github.com/CruGlobal/js-hcl2/issues/85)) ([1218a02](https://github.com/CruGlobal/js-hcl2/commit/1218a02a31667baae16dd68f935b47966465b606))
+* **deps-dev:** Bump the npm-dev-dependencies group with 2 updates ([#86](https://github.com/CruGlobal/js-hcl2/issues/86)) ([b1db77b](https://github.com/CruGlobal/js-hcl2/commit/b1db77bba389cabff08d1663c56490d93f5a665d))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#78](https://github.com/CruGlobal/js-hcl2/issues/78)) ([62cc6af](https://github.com/CruGlobal/js-hcl2/commit/62cc6af1dd47f05793528fc7773ab533a3a22df2))
+* **deps-dev:** Bump the npm-dev-dependencies group with 3 updates ([#79](https://github.com/CruGlobal/js-hcl2/issues/79)) ([a718b5b](https://github.com/CruGlobal/js-hcl2/commit/a718b5ba9994200e0ae9aeecf5d171c42c42f081))
+* **deps-dev:** Bump typescript-eslint from 8.72.0 to 8.72.1 in the npm-dev-dependencies group ([#90](https://github.com/CruGlobal/js-hcl2/issues/90)) ([ba2a6ac](https://github.com/CruGlobal/js-hcl2/commit/ba2a6accb5613769e610729ce2f9fe716e457cb8))
+* **deps-dev:** Bump vite from 8.2.1 to 8.3.4 ([#84](https://github.com/CruGlobal/js-hcl2/issues/84)) ([1a1b0d9](https://github.com/CruGlobal/js-hcl2/commit/1a1b0d96a51b18eaeb6ba124f3adbed3c6fa3aa4))
+* **deps-dev:** Bump vitest and @vitest/coverage-v8 to 5.1.0 ([#89](https://github.com/CruGlobal/js-hcl2/issues/89)) ([cffa39c](https://github.com/CruGlobal/js-hcl2/commit/cffa39c0e96c1b2dd6e29999cad2cd3b26506b4c))
+* **deps:** Bump esbuild and tsup ([#91](https://github.com/CruGlobal/js-hcl2/issues/91)) ([653516e](https://github.com/CruGlobal/js-hcl2/commit/653516e3f1b2cad0c09ae259810a8a1f38d59cef))
+
 ## [0.1.5](https://github.com/CruGlobal/js-hcl2/compare/v0.1.4...v0.1.5) (2026-10-09)
 
 
